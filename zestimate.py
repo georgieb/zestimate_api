@@ -1,8 +1,16 @@
+import os
 import requests
+from dotenv import load_dotenv
 import csv
 
+# Load environment variables from .env file
+load_dotenv()
+
 # Get the API key from the environment variables
-api_key = "API KEY HERE"
+api_key = os.getenv("API_KEY")
+
+if not api_key:
+    raise ValueError("API_KEY not found in the .env file.")
 
 # Define the API URL with your access token
 api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
