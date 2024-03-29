@@ -1,0 +1,54 @@
+import os
+import requests
+from dotenv import load_dotenv
+from prettytable import PrettyTable
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Define the base URL of the API
+base_url = "https://api.bridgedataoutput.com/api/v2/pub/parcels"
+
+# Retrieve the API key from environment variables
+api_key = os.getenv("API_KEY")
+
+# Define the list of ZPIDs
+zpids = ["44158191", "43994986", "44106066", "62936198", "44106160", "43996214", "44154066", "43807923",
+         "44105747", "43995191", "44107037", "62937284", "44151347", "44118156", "44160521", "44062156",
+         "62936150", "62936164", "62937229", "44113047", "44113615", "43970389", "44063932", "43994966",
+         "62937274", "43996838", "43996656", "44109256", "62933595", "44109202", "62937053", "62937149",
+         "62936274", "62937287", "43995934", "44117834", "44122119", "44117891", "62937147", "62935928",
+         "43972756", "44114467", "62936338", "44118194", "44113703", "44152032", "62936373", "62936341",
+         "62936265", "44112792", "62937177", "44112873", "44117674", "44101389", "43993403", "44112911",
+         "44151332", "44117786", "43993290", "44063896"]
+
+# Define a function to retrieve records for the specified ZPIDs
+def get_records_for_zpids(zpids):
+    all_records = []
+    for zpid in zpids:
+        url = f"{base_url}?zpid={zpid}&access_token={api_key}"
+        try:
+            response = requests.get(url)
+            response.raise_for_status()  # Raise an exception for HTTP errors
+            data = response.json()
+            all_records.append(data)
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to retrieve data for ZPID {zpid}: {e}")
+    return all_records
+
+# Retrieve records for the specified ZPIDs
+records = get_records_for_zpids(zpids)
+
+# Create a PrettyTable instance
+table = PrettyTable()
+
+# Add field names dynamically to the table
+if records:
+    field_names = set()
+    for record in records:
+        field_names.update(record.keys())
+    for field_name in sorted(field_names):
+        table.add_column(field_name, [record.get(field_name, "") for record in records])
+
+# Print the table
+print(table)

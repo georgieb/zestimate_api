@@ -16,7 +16,7 @@ if not api_key:
 api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
 
 # Define the coordinates for the location (longitude, latitude)
-location = (-122.15142, 48.929134)
+location = (34.28840206601289, -77.8300671579137)
 
 # Initialize an empty list to store property data
 property_data = []
@@ -24,8 +24,8 @@ property_data = []
 # Set parameters for the API request
 params = {
     "access_token": api_key,
-    "near": f"{location[0]},{location[1]}",  
-    "limit": 200
+    "near": f"{location[1]},{location[0]}",  
+    "limit": 30
 }
 
 # Make the API request
@@ -34,7 +34,7 @@ response = requests.get(api_url, params=params)
 if response.status_code == 200:
     data = response.json()
     if 'bundle' in data:
-        for result in data['bundle']:
+        for i, result in enumerate(data['bundle']):
             address = result.get('address', '')
             zestimate = result.get('zestimate', 0)
             rental_zestimate = result.get('rentalZestimate', 0)
@@ -46,6 +46,11 @@ if response.status_code == 200:
 
                 # Add a tuple to the list
                 property_data.append((address, zestimate, rental_zestimate, f"{cap_rate:.2f}%"))
+
+               # Sort the property data by Cap Rate in descending order
+                property_data.sort(key=lambda x: float(x[3].rstrip('%')), reverse=True)  # Sort by Cap Rate in descending order (index 3)
+
+
     else:
         print("No properties found.")
 else:
@@ -68,4 +73,3 @@ if property_data:
     print(property_table)
 else:
     print("No properties found.")
-
