@@ -12,7 +12,7 @@ pip install -r requirements.txt
 ```
 Run the file
 ```
-python zestimate_map.py
+python server.py
 ```
 
 Enjoy!
