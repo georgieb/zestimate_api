@@ -1,0 +1,33 @@
+.container {
+  display: flex;
+  flex-direction: row;
+}
+
+.properties-table {
+  flex: 2;
+  margin-right: 20px;
+}
+
+.properties-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.properties-table th, .properties-table td {
+  border: 1px solid #ddd;
+  padding: 8px;
+}
+
+.properties-table th {
+  background-color: #4a93bd;
+}
+
+.source-card {
+  flex: 1;
+  border: 1px solid #b0dca6;
+  padding: 10px;
+}
+
+.source-card h2 {
+  margin-top: 0;
+}

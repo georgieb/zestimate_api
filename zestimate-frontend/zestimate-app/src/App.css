@@ -1,0 +1,28 @@
+.property-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 16px;
+}
+
+.property-table th, .property-table td {
+  border: 1px solid #ddd;
+  padding: 12px;
+}
+
+.property-table th {
+  background-color: #007bff; /* Blue background color for header */
+  color: white;
+  text-align: left; /* Align header text to the left */
+}
+
+.property-table td {
+  text-align: right; /* Align cell text to the right */
+}
+
+.property-table tr:nth-child(even) {
+  background-color: #f2f2f2; /* Zebra stripes for even rows */
+}
+
+.property-table tr:hover {
+  background-color: #ddd; /* Highlight row on hover */
+}

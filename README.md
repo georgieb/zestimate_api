@@ -14,5 +14,8 @@ Run the file
 ```
 python server.py
 ```
+cd caprate-frontend/
+,,,
+npm start
 
 Enjoy!
