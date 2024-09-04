@@ -1,0 +1,36 @@
+.parcel-data-container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.parcel-data-container h1 {
+  color: #b6c1c5;
+  margin-bottom: 20px;
+}
+
+.parcel-data-container table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.parcel-data-container th,
+.parcel-data-container td {
+  padding: 10px;
+  border-bottom: 1px solid #ddd;
+  text-align: left;
+}
+
+.parcel-data-container th {
+  background-color: #3d6d62;
+  font-weight: bold;
+}
+
+.parcel-data-container tr:hover {
+  background-color: #427aae;
+}
+
+.error-message {
+  color: red;
+  font-weight: bold;
+}

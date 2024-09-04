@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { useNavigate } from 'react-router-dom';
-import './ZPIDDashboard.css';
+import './ZPIDDashboard.css'; // Import the CSS file
 
 function ZPIDDashboard() {
     const [zpidInput, setZpidInput] = useState('');
@@ -9,9 +8,9 @@ function ZPIDDashboard() {
     const [error, setError] = useState('');
     const [savedSearches, setSavedSearches] = useState([]);
     const [selectedSearch, setSelectedSearch] = useState('');
-    const navigate = useNavigate();
 
     useEffect(() => {
+        // Load saved searches from localStorage when component mounts
         const searches = JSON.parse(localStorage.getItem('savedSearches')) || [];
         setSavedSearches(searches);
     }, []);
@@ -35,7 +34,7 @@ function ZPIDDashboard() {
         if (searchName) {
             const newSearch = { name: searchName, zpids: zpidArray };
             let searches = JSON.parse(localStorage.getItem('savedSearches')) || [];
-            searches = [newSearch, ...searches].slice(0, 10);
+            searches = [newSearch, ...searches].slice(0, 10); // Keep only the last 10 searches
             localStorage.setItem('savedSearches', JSON.stringify(searches));
             setSavedSearches(searches);
         }
@@ -51,11 +50,7 @@ function ZPIDDashboard() {
     };
 
     const openNearbyProperties = (zpid) => {
-        navigate(`/nearby-properties?zpid=${zpid}`);
-    };
-
-    const openParcelData = (zpid) => {
-        navigate(`/parcel-data?zpid=${zpid}`);
+        window.open(`/nearby-properties?zpid=${zpid}`, '_blank');
     };
 
     return (
@@ -92,9 +87,9 @@ function ZPIDDashboard() {
                             <th>Address</th>
                             <th>Rental Zestimate</th>
                             <th>Zestimate</th>
-                            <th>Cap Rate</th>
+                            <th>Cap Rate</th> 
                             <th>Zillow URL</th>
-                            <th>Actions</th>
+                            <th>Action</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -103,14 +98,11 @@ function ZPIDDashboard() {
                                 <td>{property.address}</td>
                                 <td>{property.rentalZestimate.toLocaleString()}</td>
                                 <td>{property.zestimate.toLocaleString()}</td>
-                                <td>{property.capRate}</td>
+                                <td>{property.capRate}</td> 
                                 <td><a href={property.zillowUrl} target="_blank" rel="noopener noreferrer">View on Zillow</a></td>
                                 <td>
                                     <button onClick={() => openNearbyProperties(property.zpid)}>
                                         Find Nearby Properties
-                                    </button>
-                                    <button onClick={() => openParcelData(property.zpid)}>
-                                        View Parcel Data
                                     </button>
                                 </td>
                             </tr>
