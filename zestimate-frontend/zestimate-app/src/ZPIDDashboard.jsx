@@ -23,7 +23,9 @@ function ZPIDDashboard() {
             const response = await axios.post('http://localhost:5001/get-properties', { zpids: zpidArray });
             setProperties(response.data);
             setError('');
-            saveSearch(zpidArray);
+            if (!selectedSearch) {
+                saveSearch(zpidArray);
+            }
         } catch (error) {
             setError('Failed to fetch properties. Please try again.');
             console.error('Error fetching properties:', error);
@@ -58,6 +60,11 @@ function ZPIDDashboard() {
         navigate(`/parcel-data?zpid=${zpid}`);
     };
 
+    const openMapView = () => {
+        const zpidArray = zpidInput.split(',').map(zpid => zpid.trim());
+        navigate(`/properties?zpids=${zpidArray.join(',')}`);
+    };
+
     return (
         <div className="container">
             <div className="form-container">
@@ -82,6 +89,7 @@ function ZPIDDashboard() {
                             ))}
                         </select>
                     </label>
+                    <button type="button" onClick={openMapView}>View on Map</button>
                 </form>
                 {error && <p className="error-message">{error}</p>}
             </div>

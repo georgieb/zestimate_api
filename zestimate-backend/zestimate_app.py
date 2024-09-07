@@ -125,5 +125,32 @@ def get_nearby_properties():
     except requests.RequestException as e:
         return jsonify({'error': str(e)}), 500
 
+# Updated endpoint to get parcel data by ZPIDs
+@app.route('/get-parcel-data', methods=['POST'])
+def get_parcel_data():
+    zpid_list = request.json.get('zpids', [])
+    
+    if not zpid_list:
+        return jsonify({"error": "No ZPIDs provided"}), 400
+
+    base_url = "https://api.bridgedataoutput.com/api/v2/pub/parcels"
+    all_records = []
+
+    for zpid in zpid_list:
+        url = f"{base_url}?zpid={zpid}&access_token={api_key}"
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()
+            if 'bundle' in data and len(data['bundle']) > 0:
+                # Include all fields from the API response
+                all_records.append(data['bundle'][0])
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to retrieve data for ZPID {zpid}: {e}")
+
+    if all_records:
+        return jsonify(all_records), 200
+    else:
+        return jsonify({"error": "No parcel data found"}), 404
 if __name__ == '__main__':
     app.run(port=5001)
