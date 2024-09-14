@@ -4,14 +4,15 @@ import os
 import requests
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env file if running locally
+if os.getenv('FLASK_ENV') != 'production':
+    load_dotenv()
 
 # Get the API key from the environment variables
 api_key = os.getenv("API_KEY")
 
 if not api_key:
-    raise ValueError("API_KEY not found in the .env file.")
+    raise ValueError("API_KEY not found in the environment variables.")
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -152,5 +153,8 @@ def get_parcel_data():
         return jsonify(all_records), 200
     else:
         return jsonify({"error": "No parcel data found"}), 404
+
 if __name__ == '__main__':
-    app.run(port=5001)
+    port = int(os.environ.get('PORT', 5001))  # Use Heroku's dynamic port
+    app.run(host='0.0.0.0', port=port)
+
