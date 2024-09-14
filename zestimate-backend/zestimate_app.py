@@ -18,6 +18,10 @@ if not api_key:
 app = Flask(__name__)
 CORS(app)
 
+@app.route('/')
+def home():
+    return "Welcome to the Zestimate API!"
+
 # Endpoint to get property data by ZPIDs
 @app.route('/get-properties', methods=['POST'])
 def get_properties():
