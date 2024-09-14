@@ -1,1 +1,1 @@
-web: gunicorn zestimate_app:app
+web: gunicorn zestimate-backend.zestimate_app:app
