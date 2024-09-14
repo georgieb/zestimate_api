@@ -12,14 +12,11 @@ itsdangerous==2.2.0
 Jinja2==3.1.4
 MarkupSafe==2.1.5
 node-semver==0.9.0
-npm==0.1.1
 packaging==24.1
 prettytable==3.10.0
 python-dotenv==1.0.1
-react==4.3.0
 requests==2.32.2
 urllib3==2.2.1
 wcwidth==0.2.13
 Werkzeug==3.0.3
-optional-django>=0.1.0,<0.4.0
 
