@@ -1,0 +1,6 @@
+{
+    "buildCommand": "cd zestimate-frontend/zestimate-app && npm install && npm run build",
+    "outputDirectory": "zestimate-frontend/zestimate-app/dist",
+    "installCommand": "cd zestimate-frontend/zestimate-app && npm install",
+    "devCommand": "cd zestimate-frontend/zestimate-app && npm run dev"
+  }
