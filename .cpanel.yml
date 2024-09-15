@@ -1,0 +1,7 @@
+---
+deployment:
+  tasks:
+    - export DEPLOY_PATH=/home/realli/public_html/zestimate-app
+    - /usr/local/bin/npm install
+    - /usr/local/bin/npm run build
+    - /bin/cp -r dist/* $DEPLOY_PATH/
