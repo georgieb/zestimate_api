@@ -16,7 +16,7 @@ if not api_key:
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": ["https://realli.app", "http://localhost:5173"]}})
 
 @app.route('/')
 def home():
