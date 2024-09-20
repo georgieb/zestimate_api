@@ -2,10 +2,10 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // https://vitejs.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
-  base: '/repositories/zestimate_api/zestimate-frontend/zestimate-app/', // Reflects your app's subdirectory
-})
-
-
-  
+  base: mode === 'development' ? '/' : '/repositories/zestimate_api/zestimate-frontend/zestimate-app/',
+  build: {
+    outDir: 'dist', // Ensure the output directory is set to 'dist'
+  },
+}))
