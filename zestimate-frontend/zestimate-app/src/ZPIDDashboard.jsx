@@ -20,7 +20,7 @@ function ZPIDDashboard() {
         e.preventDefault();
         const zpidArray = zpidInput.split(',').map(zpid => zpid.trim());
         try {
-            const response = await axios.post('https://realli-95ae66f0e9f4.herokuapp.com/', { zpids: zpidArray });
+            const response = await axios.post(`${process.env.REACT_APP_API_BASE_URL}/get-properties`, { zpids: zpidArray });
             setProperties(response.data);
             setError('');
             if (!selectedSearch) {
