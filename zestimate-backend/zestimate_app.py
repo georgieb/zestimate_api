@@ -16,7 +16,8 @@ if not api_key:
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": ["https://realli.app", "http://localhost:5173"]}})
+CORS(app, resources={r"/api/*": {"origins": ["https://realli-95ae66f0e9f4.herokuapp.com", "http://localhost:5173"]}})
+
 
 @app.route('/')
 def home():
@@ -159,6 +160,7 @@ def get_parcel_data():
         return jsonify({"error": "No parcel data found"}), 404
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5001))  # Use Heroku's dynamic port
+    port = int(os.environ.get('PORT', 5001))  # Use Heroku's dynamic port or fallback to 5001
     app.run(host='0.0.0.0', port=port)
+
 
