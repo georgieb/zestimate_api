@@ -5,4 +5,4 @@ venv/
 .vercel
 
 __pycache__/
-*.py[cod]
+*.py[cod].DS_Store
