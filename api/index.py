@@ -19,57 +19,52 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
-logger.debug("Initializing Flask app")
-app = Flask(__name__)
-CORS(app)
+try:
+    # Initialize Flask app
+    logger.debug("Initializing Flask app")
+    app = Flask(__name__)
+    CORS(app)
 
-# Load environment variables
-logger.debug("Loading environment variables")
-load_dotenv()
-API_KEY = os.environ.get("API_KEY")
+    # Load environment variables
+    logger.debug("Loading environment variables")
+    load_dotenv()
+    API_KEY = os.environ.get("API_KEY")
 
-if not API_KEY:
-    logger.error("API_KEY is not set!")
-else:
-    logger.debug(f"API_KEY found with length: {len(API_KEY)}")
+    if not API_KEY:
+        logger.error("API_KEY is not set!")
+    else:
+        logger.debug(f"API_KEY found with length: {len(API_KEY)}")
 
-# Configure retry strategy
-retry_strategy = Retry(
-    total=5,
-    backoff_factor=2,
-    status_forcelist=[429, 500, 502, 503, 504]
-)
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=5,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504]
+    )
 
-# Setup requests session
-http = requests.Session()
-http.mount("https://", HTTPAdapter(max_retries=retry_strategy))
-http.mount("http://", HTTPAdapter(max_retries=retry_strategy))
+    # Setup requests session
+    http = requests.Session()
+    http.mount("https://", HTTPAdapter(max_retries=retry_strategy))
+    http.mount("http://", HTTPAdapter(max_retries=retry_strategy))
 
-@app.route('/api/test', methods=['GET'])
-def test_route():
-    """Test route to verify app is working"""
-    try:
+    @app.route('/api/test', methods=['GET'])
+    def test_route():
+        """Test route to verify app is working"""
         return jsonify({
             "status": "ok",
             "api_key_present": bool(API_KEY),
             "api_key_length": len(API_KEY) if API_KEY else 0,
             "environment": dict(os.environ)
         })
-    except Exception as e:
-        logger.error(f"Error in test route: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({"error": str(e)}), 500
 
-def safe_float(value, default=0.0):
-    """Safely convert value to float"""
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return default
-
+    def safe_float(value, default=0.0):
+        """Safely convert value to float"""
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
 
     @app.route('/api/properties', methods=['POST'])
     def get_properties():
