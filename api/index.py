@@ -47,6 +47,15 @@ try:
     http.mount("https://", HTTPAdapter(max_retries=retry_strategy))
     http.mount("http://", HTTPAdapter(max_retries=retry_strategy))
 
+    def safe_float(value, default=0.0):
+        """Safely convert value to float"""
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+
     @app.route('/api/test', methods=['GET'])
     def test_route():
         """Test route to verify app is working"""
@@ -61,6 +70,8 @@ try:
             logger.error(f"Error in test route: {str(e)}")
             logger.error(traceback.format_exc())
             return jsonify({"error": str(e)}), 500
+
+    # Rest of the code...
 
     @app.route('/api/properties', methods=['POST'])
     def get_properties():
