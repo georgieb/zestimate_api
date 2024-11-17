@@ -228,30 +228,32 @@ document.addEventListener('DOMContentLoaded', function() {
     };
 
     // Function to load portfolio from URL
-    const loadPortfolio = async () => {
-        const urlParams = new URLSearchParams(window.location.search);
-        const portfolioName = urlParams.get('portfolio');
-        
-        if (portfolioName) {
-            try {
-                const response = await fetch('/api/get-portfolios');
-                if (!response.ok) throw new Error('Failed to fetch portfolios');
-                
-                const portfolios = await response.json();
-                const portfolio = portfolios.find(p => p.name === portfolioName);
-                
-                if (portfolio) {
-                    document.getElementById('portfolioName').value = portfolio.name;
-                    document.getElementById('zpidInput').value = portfolio.zpids.join(',');
-                    currentPortfolio = portfolio;
-                    await analyzePortfolio();
-                }
-            } catch (error) {
-                alert('Error loading portfolio: ' + error.message);
+    async function loadPortfolio(portfolioName) {
+        try {
+            setLoading(true);
+            const response = await fetch(`/api/load-portfolio/${encodeURIComponent(portfolioName)}`);
+            
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to load portfolio');
             }
+            
+            const portfolioData = await response.json();
+            
+            // Update the UI
+            document.getElementById('portfolioName').value = portfolioData.name;
+            document.getElementById('zpidInput').value = portfolioData.properties.map(p => p.zpid).join(',');
+            
+            updateSummary(portfolioData.summary);
+            updatePropertyList(portfolioData.properties);
+            updateMap(portfolioData.properties);
+            
+        } catch (error) {
+            alert('Error loading portfolio: ' + error.message);
+        } finally {
+            setLoading(false);
         }
-    };
-
+    }
     // Function to analyze portfolio
     // Update the analyzePortfolio function in main.js
 const analyzePortfolio = async () => {
