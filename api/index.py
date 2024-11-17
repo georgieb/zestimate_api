@@ -1,3 +1,4 @@
+# api/index.py
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
 import os
@@ -6,11 +7,16 @@ from dotenv import load_dotenv
 import json
 from datetime import datetime
 import logging
+import sys
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Setup logging
-logging.basicConfig(level=logging.DEBUG)
+# Enhanced logging setup
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout  # Ensure logs go to stdout for Vercel
+)
 logger = logging.getLogger(__name__)
 
 # Initialize Flask app
@@ -18,7 +24,13 @@ app = Flask(__name__)
 CORS(app)
 
 # Load environment variables
-API_KEY = os.getenv("API_KEY")
+load_dotenv()
+API_KEY = os.environ.get("API_KEY")
+
+# Verify API key is present
+if not API_KEY:
+    logger.error("API_KEY environment variable is not set!")
+    raise ValueError("API_KEY environment variable is required")
 
 # Configure retry strategy
 retry_strategy = Retry(
@@ -53,7 +65,13 @@ def get_parcel_data_batch(zpids):
         }
         
         try:
+            logger.debug(f"Fetching parcel data for chunk: {chunk}")
             response = http.get(url, params=params)
+            
+            # Log API response for debugging
+            logger.debug(f"API Response Status: {response.status_code}")
+            logger.debug(f"API Response Headers: {response.headers}")
+            
             response.raise_for_status()
             data = response.json()
             
@@ -68,27 +86,22 @@ def get_parcel_data_batch(zpids):
                         'livingArea': safe_float(parcel.get('BuildingAreaSqFt')),
                         'propertyType': parcel.get('PropertyTypeName')
                     }
+                    logger.debug(f"Processed parcel data for ZPID {zpid}")
         except Exception as e:
             logger.error(f"Error fetching parcel data: {str(e)}")
+            # Include the full error traceback in logs
+            logger.exception("Full traceback:")
             continue
         
     return all_parcel_data
 
-# Routes
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def catch_all(path):
-    if path == "":
-        return render_template('index.html')
-    elif path == "portfolio":
-        return render_template('portfolio.html')
-    elif path.startswith('static/'):
-        return send_from_directory('.', path)
-    return render_template('index.html')
-
 @app.route('/api/properties', methods=['POST'])
 def get_properties():
     try:
+        logger.debug("Received request to /api/properties")
+        logger.debug(f"Request headers: {dict(request.headers)}")
+        logger.debug(f"Request body: {request.json}")
+        
         zpid_list = request.json.get('zpids', [])
         
         if not zpid_list:
@@ -97,15 +110,20 @@ def get_properties():
         api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
         all_results = []
         
-        batch_size = 5
-        for i in range(0, len(zpid_list), batch_size):
-            batch = zpid_list[i:i+batch_size]
+        for i in range(0, len(zpid_list), 5):
+            batch = zpid_list[i:i+5]
             params = {
                 "access_token": API_KEY,
                 "zpid.in": ",".join(batch)
             }
             
+            logger.debug(f"Fetching Zestimate data for batch: {batch}")
             response = http.get(api_url, params=params)
+            
+            # Log API response
+            logger.debug(f"Zestimate API Response Status: {response.status_code}")
+            logger.debug(f"Zestimate API Response Headers: {response.headers}")
+            
             response.raise_for_status()
             data = response.json()
             
@@ -127,72 +145,56 @@ def get_properties():
                     result.update(parcel_data[zpid])
                 processed_results.append(result)
 
-            total_value = sum(safe_float(p.get('zestimate')) for p in processed_results)
-            total_rental = sum(safe_float(p.get('rentalZestimate')) for p in processed_results)
-            total_sqft = sum(safe_float(p.get('livingArea', 0)) for p in processed_results)
-            
-            portfolio_metrics = {
+            metrics = {
                 'properties': processed_results,
                 'summary': {
-                    'total_value': total_value,
-                    'total_rental': total_rental,
+                    'total_value': sum(safe_float(p.get('zestimate')) for p in processed_results),
+                    'total_rental': sum(safe_float(p.get('rentalZestimate')) for p in processed_results),
                     'avg_cap_rate': sum(p['capRate'] for p in processed_results) / len(processed_results),
                     'property_count': len(processed_results),
-                    'total_sqft': total_sqft,
-                    'avg_price_per_sqft': total_value / total_sqft if total_sqft > 0 else 0
+                    'total_sqft': sum(safe_float(p.get('livingArea', 0)) for p in processed_results)
                 }
             }
             
-            return jsonify(portfolio_metrics), 200
+            if metrics['summary']['total_sqft'] > 0:
+                metrics['summary']['avg_price_per_sqft'] = metrics['summary']['total_value'] / metrics['summary']['total_sqft']
+            else:
+                metrics['summary']['avg_price_per_sqft'] = 0
+            
+            logger.debug("Successfully processed all properties")
+            return jsonify(metrics), 200
         
+        logger.warning("No results found for the provided ZPIDs")
         return jsonify({"error": "No results found"}), 404
+        
     except Exception as e:
         logger.error(f"Error in get_properties: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        logger.exception("Full traceback:")
+        return jsonify({
+            "error": "Internal server error",
+            "details": str(e),
+            "api_key_present": bool(API_KEY)
+        }), 500
 
-@app.route('/api/nearby-properties/<zpid>', methods=['GET'])
-def nearby_properties(zpid):
-    try:
-        api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
-        params = {
-            "access_token": API_KEY,
-            "zpid": zpid
-        }
-        
-        response = http.get(api_url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        
-        if 'bundle' in data and len(data['bundle']) > 0:
-            property_data = data['bundle'][0]
-            latitude = property_data.get('Latitude')
-            longitude = property_data.get('Longitude')
-            
-            if latitude and longitude:
-                params = {
-                    "access_token": API_KEY,
-                    "near": f"{longitude},{latitude}",
-                    "limit": 100
-                }
-                
-                response = http.get(api_url, params=params)
-                response.raise_for_status()
-                data = response.json()
-                
-                if 'bundle' in data:
-                    return jsonify(data['bundle']), 200
-                
-        return jsonify({"error": "Property coordinates not found"}), 404
-        
-    except Exception as e:
-        logger.error(f"Error in nearby_properties: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+# Add this test route to verify API key
+@app.route('/api/test', methods=['GET'])
+def test_api():
+    return jsonify({
+        "status": "ok",
+        "api_key_present": bool(API_KEY),
+        "api_key_length": len(API_KEY) if API_KEY else 0
+    })
 
 # Error handler
 @app.errorhandler(Exception)
 def handle_exception(e):
     logger.error(f"Unhandled exception: {str(e)}")
-    return jsonify({"error": "Internal server error"}), 500
+    logger.exception("Full traceback:")
+    return jsonify({
+        "error": "Internal server error",
+        "details": str(e),
+        "type": type(e).__name__
+    }), 500
 
 # Required for Vercel
 app = app.wsgi_app
