@@ -47,6 +47,40 @@ try:
     http.mount("https://", HTTPAdapter(max_retries=retry_strategy))
     http.mount("http://", HTTPAdapter(max_retries=retry_strategy))
 
+    def get_parcel_data_batch(zpids):
+        """Get parcel data for multiple ZPIDs"""
+        url = "https://api.bridgedataoutput.com/api/v2/pub/parcels"
+        chunk_size = 5
+        all_parcel_data = {}
+        
+        for i in range(0, len(zpids), chunk_size):
+            chunk = zpids[i:i + chunk_size]
+            params = {
+                "access_token": API_KEY,
+                "zpid.in": ",".join(chunk)
+            }
+            
+            try:
+                logger.debug(f"Fetching parcel data for chunk: {chunk}")
+                response = http.get(url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                if 'bundle' in data and data['bundle']:
+                    for parcel in data['bundle']:
+                        # Process parcel data here
+                        pass
+                        
+                if response.status_code == 429:
+                    logger.warning("Rate limit hit, waiting 2 seconds...")
+                    time.sleep(2)
+                    
+            except requests.RequestException as e:
+                logger.error(f"Error fetching parcel data: {str(e)}")
+                continue
+        
+        return all_parcel_data
+
     @app.route('/api/test', methods=['GET'])
     def test_route():
         """Test route to verify app is working"""
@@ -62,165 +96,91 @@ try:
             logger.error(traceback.format_exc())
             return jsonify({"error": str(e)}), 500
 
-def get_parcel_data_batch(zpids):
-    """Get parcel data for multiple ZPIDs"""
-    url = "https://api.bridgedataoutput.com/api/v2/pub/parcels"
-    chunk_size = 5
-    all_parcel_data = {}
-    
-    for i in range(0, len(zpids), chunk_size):
-        chunk = zpids[i:i + chunk_size]
-        params = {
-            "access_token": API_KEY,
-            "zpid.in": ",".join(chunk)
-        }
-        
+    @app.route('/api/properties', methods=['POST'])
+    def get_properties():
+        logger.debug("Properties endpoint hit")
         try:
-            logger.debug(f"Fetching parcel data for chunk: {chunk}")
-            response = http.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
+            # Log request details
+            logger.debug(f"Request Headers: {dict(request.headers)}")
+            logger.debug(f"Request Body: {request.get_data(as_text=True)}")
             
-            if 'bundle' in data and data['bundle']:
-                for parcel in data['bundle']:
-                    zpid = str(parcel.get('zpid'))
-                    all_parcel_data[zpid] = {
-                        'bedrooms': safe_float(parcel.get('BedroomsCount')),
-                        'bathrooms': safe_float(parcel.get('BathroomsTotalCount')),
-                        'lotSize': safe_float(parcel.get('LotSizeSquareFeet')),
-                        'yearBuilt': parcel.get('YearBuilt'),
-                        'livingArea': safe_float(parcel.get('BuildingAreaSqFt')),
-                        'propertyType': parcel.get('PropertyTypeName'),
-                        'constructionType': parcel.get('ConstructionType'),
-                        'foundation': parcel.get('Foundation'),
-                        'parkingSpaces': safe_float(parcel.get('ParkingSpaces')),
-                        'stories': safe_float(parcel.get('StoriesCount')),
-                        'taxAssessedValue': safe_float(parcel.get('TaxAssessedValue')),
-                        'taxYear': parcel.get('TaxYear'),
-                        'propertyTax': safe_float(parcel.get('TaxAmount')),
-                    }
-                    logger.debug(f"Processed parcel data for ZPID {zpid}")
+            # Get ZPIDs from request
+            zpid_list = request.json.get('zpids', [])
+            if not zpid_list:
+                return jsonify({"error": "No ZPIDs provided"}), 400
+
+            logger.debug(f"Processing ZPIDs: {zpid_list}")
+
+            api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
+            all_results = []
             
-            if response.status_code == 429:
-                logger.warning("Rate limit hit, waiting 2 seconds...")
-                time.sleep(2)
-                
-        except Exception as e:
-            logger.error(f"Error fetching parcel data: {str(e)}")
-            logger.exception("Full traceback:")
-            continue
-        
-    return all_parcel_data
-
-@app.route('/')
-def home():
-    """Serve the main page"""
-    try:
-        return render_template('index.html')
-    except Exception as e:
-        logger.error(f"Error serving index: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/portfolio')
-def portfolio():
-    """Serve the portfolio page"""
-    try:
-        return render_template('portfolio.html')
-    except Exception as e:
-        logger.error(f"Error serving portfolio: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/static/<path:filename>')
-def serve_static(filename):
-    """Serve static files"""
-    try:
-        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        return send_from_directory(os.path.join(root_dir, 'static'), filename)
-    except Exception as e:
-        logger.error(f"Error serving static file: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/properties', methods=['POST'])
-def get_properties():
-    """Get property data endpoint"""
-    try:
-        logger.debug("Received properties request")
-        logger.debug(f"Request JSON: {request.json}")
-        
-        zpid_list = request.json.get('zpids', [])
-        if not zpid_list:
-            return jsonify({"error": "No ZPIDs provided"}), 400
-
-        api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
-        all_results = []
-        
-        # Get Zestimate data in batches
-        batch_size = 5
-        for i in range(0, len(zpid_list), batch_size):
-            batch = zpid_list[i:i+batch_size]
-            params = {
-                "access_token": API_KEY,
-                "zpid.in": ",".join(batch)
-            }
-            
-            try:
-                logger.debug(f"Fetching Zestimate data for batch: {batch}")
-                response = http.get(api_url, params=params)
-                response.raise_for_status()
-                data = response.json()
-                
-                if 'bundle' in data:
-                    for result in data['bundle']:
-                        zestimate = safe_float(result.get('zestimate'))
-                        rental_zestimate = safe_float(result.get('rentalZestimate'))
-                        cap_rate = (rental_zestimate * 12 * 0.60 / zestimate * 100) if zestimate != 0 else 0
-                        result['capRate'] = cap_rate
-                        all_results.append(result)
-                        
-                if response.status_code == 429:
-                    logger.warning("Rate limit hit, waiting 2 seconds...")
-                    time.sleep(2)
-                    
-            except requests.RequestException as e:
-                logger.error(f"Error fetching Zestimate data: {str(e)}")
-                continue
-
-        if all_results:
-            # Get parcel data
-            parcel_data = get_parcel_data_batch([str(r.get('zpid')) for r in all_results])
-            
-            # Process results and merge data
-            processed_results = []
-            for result in all_results:
-                zpid = str(result.get('zpid'))
-                if zpid in parcel_data:
-                    result.update(parcel_data[zpid])
-                processed_results.append(result)
-
-            # Calculate portfolio metrics
-            total_value = sum(safe_float(p.get('zestimate')) for p in processed_results)
-            total_rental = sum(safe_float(p.get('rentalZestimate')) for p in processed_results)
-            total_sqft = sum(safe_float(p.get('livingArea', 0)) for p in processed_results)
-            
-            portfolio_metrics = {
-                'properties': processed_results,
-                'summary': {
-                    'total_value': total_value,
-                    'total_rental': total_rental,
-                    'avg_cap_rate': sum(p['capRate'] for p in processed_results) / len(processed_results),
-                    'property_count': len(processed_results),
-                    'total_sqft': total_sqft,
-                    'avg_price_per_sqft': total_value / total_sqft if total_sqft > 0 else 0,
-                    'total_bedrooms': sum(safe_float(p.get('bedrooms', 0)) for p in processed_results),
-                    'total_bathrooms': sum(safe_float(p.get('bathrooms', 0)) for p in processed_results)
+            # Get Zestimate data in batches
+            batch_size = 5
+            for i in range(0, len(zpid_list), batch_size):
+                batch = zpid_list[i:i+batch_size]
+                params = {
+                    "access_token": API_KEY,
+                    "zpid.in": ",".join(batch)
                 }
-            }
-            
-            return jsonify(portfolio_metrics), 200
-        
-        return jsonify({"error": "No results found"}), 404
+                
+                try:
+                    logger.debug(f"Fetching Zestimate data for batch: {batch}")
+                    response = http.get(api_url, params=params)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    if 'bundle' in data:
+                        for result in data['bundle']:
+                            zestimate = result.get('zestimate')
+                            rental_zestimate = result.get('rentalZestimate')
+                            cap_rate = (rental_zestimate * 12 * 0.60 / zestimate * 100) if zestimate != 0 else 0
+                            result['capRate'] = cap_rate
+                            all_results.append(result)
+                            
+                    if response.status_code == 429:
+                        logger.warning("Rate limit hit, waiting 2 seconds...")
+                        time.sleep(2)
+                        
+                except requests.RequestException as e:
+                    logger.error(f"Error fetching Zestimate data: {str(e)}")
+                    continue
 
-       except Exception as e:
+            if all_results:
+                # Get parcel data
+                parcel_data = get_parcel_data_batch([str(r.get('zpid')) for r in all_results])
+                
+                # Process results and merge data
+                processed_results = []
+                for result in all_results:
+                    zpid = str(result.get('zpid'))
+                    if zpid in parcel_data:
+                        result.update(parcel_data[zpid])
+                    processed_results.append(result)
+
+                # Calculate portfolio metrics
+                total_value = sum(result.get('zestimate', 0) for result in processed_results)
+                total_rental = sum(result.get('rentalZestimate', 0) for result in processed_results)
+                total_sqft = sum(result.get('livingArea', 0) for result in processed_results)
+                
+                portfolio_metrics = {
+                    'properties': processed_results,
+                    'summary': {
+                        'total_value': total_value,
+                        'total_rental': total_rental,
+                        'avg_cap_rate': sum(p['capRate'] for p in processed_results) / len(processed_results),
+                        'property_count': len(processed_results),
+                        'total_sqft': total_sqft,
+                        'avg_price_per_sqft': total_value / total_sqft if total_sqft > 0 else 0,
+                        'total_bedrooms': sum(result.get('bedrooms', 0) for result in processed_results),
+                        'total_bathrooms': sum(result.get('bathrooms', 0) for result in processed_results)
+                    }
+                }
+                
+                return jsonify(portfolio_metrics), 200
+            
+            return jsonify({"error": "No results found"}), 404
+
+        except Exception as e:
             logger.error(f"Error in get_properties: {str(e)}")
             logger.error(traceback.format_exc())
             return jsonify({
@@ -228,103 +188,103 @@ def get_properties():
                 "message": str(e),
                 "traceback": traceback.format_exc()
             }), 500
-    
-@app.route('/api/nearby-properties/<zpid>')
-def nearby_properties(zpid):
-    """Get nearby properties endpoint"""
-    try:
-        logger.debug(f"Fetching nearby properties for ZPID: {zpid}")
-        api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
-        
-        # First get the property's coordinates
-        params = {
-            "access_token": API_KEY,
-            "zpid": zpid
-        }
-        
-        response = http.get(api_url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        
-        if 'bundle' in data and len(data['bundle']) > 0:
-            property_data = data['bundle'][0]
-            latitude = property_data.get('Latitude')
-            longitude = property_data.get('Longitude')
+
+    @app.route('/api/nearby-properties/<zpid>')
+    def nearby_properties(zpid):
+        """Get nearby properties endpoint"""
+        try:
+            logger.debug(f"Fetching nearby properties for ZPID: {zpid}")
+            api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
             
-            if latitude and longitude:
-                # Get nearby properties
-                params = {
-                    "access_token": API_KEY,
-                    "near": f"{longitude},{latitude}",
-                    "limit": 100
-                }
+            # First get the property's coordinates
+            params = {
+                "access_token": API_KEY,
+                "zpid": zpid
+            }
+            
+            response = http.get(api_url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'bundle' in data and len(data['bundle']) > 0:
+                property_data = data['bundle'][0]
+                latitude = property_data.get('Latitude')
+                longitude = property_data.get('Longitude')
                 
-                response = http.get(api_url, params=params)
-                response.raise_for_status()
-                nearby_data = response.json()
-                
-                if 'bundle' in nearby_data:
-                    properties = []
-                    for prop in nearby_data['bundle']:
-                        # Calculate metrics for each property
-                        zestimate = safe_float(prop.get('zestimate'))
-                        rental_zestimate = safe_float(prop.get('rentalZestimate'))
-                        cap_rate = (rental_zestimate * 12 * 0.60 / zestimate * 100) if zestimate != 0 else 0
-                        prop['capRate'] = cap_rate
-                        
-                        # Get parcel data
-                        if prop.get('zpid'):
-                            parcel_data = get_parcel_data_batch([str(prop['zpid'])])
-                            if str(prop['zpid']) in parcel_data:
-                                prop.update(parcel_data[str(prop['zpid'])])
-                        
-                        properties.append(prop)
+                if latitude and longitude:
+                    # Get nearby properties
+                    params = {
+                        "access_token": API_KEY,
+                        "near": f"{longitude},{latitude}",
+                        "limit": 100
+                    }
                     
-                    return jsonify(properties), 200
+                    response = http.get(api_url, params=params)
+                    response.raise_for_status()
+                    nearby_data = response.json()
+                    
+                    if 'bundle' in nearby_data:
+                        properties = []
+                        for prop in nearby_data['bundle']:
+                            # Calculate metrics for each property
+                            zestimate = prop.get('zestimate')
+                            rental_zestimate = prop.get('rentalZestimate')
+                            cap_rate = (rental_zestimate * 12 * 0.60 / zestimate * 100) if zestimate != 0 else 0
+                            prop['capRate'] = cap_rate
+                            
+                            # Get parcel data
+                            if prop.get('zpid'):
+                                parcel_data = get_parcel_data_batch([str(prop['zpid'])])
+                                if str(prop['zpid']) in parcel_data:
+                                    prop.update(parcel_data[str(prop['zpid'])])
+                            
+                            properties.append(prop)
+                        
+                        return jsonify(properties), 200
                 
-        return jsonify({"error": "Property coordinates not found"}), 404
-        
-    except Exception as e:
-        logger.error(f"Error in nearby_properties: {str(e)}")
-        logger.exception("Full traceback:")
+            return jsonify({"error": "Property coordinates not found"}), 404
+            
+        except Exception as e:
+            logger.error(f"Error in nearby_properties: {str(e)}")
+            logger.exception("Full traceback:")
+            return jsonify({
+                "error": "Internal server error",
+                "details": str(e),
+                "type": type(e).__name__
+            }), 500
+
+    @app.route('/api/test')
+    def test_api():
+        """Test endpoint for API verification"""
         return jsonify({
-            "error": "Internal server error",
-            "details": str(e),
-            "type": type(e).__name__
-        }), 500
+            "status": "ok",
+            "api_key_present": bool(API_KEY),
+            "api_key_length": len(API_KEY) if API_KEY else 0,
+            "routes": [str(rule) for rule in app.url_map.iter_rules()]
+        })
 
-@app.route('/api/test')
-def test_api():
-    """Test endpoint for API verification"""
-    return jsonify({
-        "status": "ok",
-        "api_key_present": bool(API_KEY),
-        "api_key_length": len(API_KEY) if API_KEY else 0,
-        "routes": [str(rule) for rule in app.url_map.iter_rules()]
-    })
+    # Catch-all route for undefined routes
+    @app.route('/<path:path>')
+    def catch_all(path):
+        """Handle undefined routes"""
+        logger.warning(f"Undefined route accessed: {path}")
+        return jsonify({
+            "error": "Not found",
+            "message": f"The path /{path} does not exist",
+            "available_routes": [str(rule) for rule in app.url_map.iter_rules()]
+        }), 404
 
-# Catch-all route for undefined routes
-@app.route('/<path:path>')
-def catch_all(path):
-    """Handle undefined routes"""
-    logger.warning(f"Undefined route accessed: {path}")
-    return jsonify({
-        "error": "Not found",
-        "message": f"The path /{path} does not exist",
-        "available_routes": [str(rule) for rule in app.url_map.iter_rules()]
-    }), 404
+    # Error handlers
+    @app.errorhandler(404)
+    def not_found_error(error):
+        logger.warning(f"404 error: {error}")
+        return jsonify({
+            "error": "Not found",
+            "message": "The requested resource was not found",
+            "available_routes": [str(rule) for rule in app.url_map.iter_rules()]
+        }), 404
 
-# Error handlers
-@app.errorhandler(404)
-def not_found_error(error):
-    logger.warning(f"404 error: {error}")
-    return jsonify({
-        "error": "Not found",
-        "message": "The requested resource was not found",
-        "available_routes": [str(rule) for rule in app.url_map.iter_rules()]
-    }), 404
-
-   # Generic error handler
+    # Generic error handler
     @app.errorhandler(Exception)
     def handle_exception(e):
         logger.error(f"Unhandled exception: {str(e)}")
