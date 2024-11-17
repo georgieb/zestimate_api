@@ -50,45 +50,17 @@ try:
     @app.route('/api/test', methods=['GET'])
     def test_route():
         """Test route to verify app is working"""
-        return jsonify({
-            "status": "ok",
-            "api_key_present": bool(API_KEY),
-            "api_key_length": len(API_KEY) if API_KEY else 0,
-            "environment": dict(os.environ)
-        })
-
-    def safe_float(value, default=0.0):
-        """Safely convert value to float"""
-        if value is None:
-            return default
         try:
-            return float(value)
-        except (ValueError, TypeError):
-            return default
-
-    @app.route('/api/properties', methods=['POST'])
-    def get_properties():
-        logger.debug("Properties endpoint hit")
-        try:
-            # Log request details
-            logger.debug(f"Request Headers: {dict(request.headers)}")
-            logger.debug(f"Request Body: {request.get_data(as_text=True)}")
-            
-            # Get ZPIDs from request
-            zpid_list = request.json.get('zpids', [])
-            if not zpid_list:
-                return jsonify({"error": "No ZPIDs provided"}), 400
-
-            logger.debug(f"Processing ZPIDs: {zpid_list}")
-
-def safe_float(value, default=0.0):
-    """Safely convert value to float"""
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return default
+            return jsonify({
+                "status": "ok",
+                "api_key_present": bool(API_KEY),
+                "api_key_length": len(API_KEY) if API_KEY else 0,
+                "environment": dict(os.environ)
+            })
+        except Exception as e:
+            logger.error(f"Error in test route: {str(e)}")
+            logger.error(traceback.format_exc())
+            return jsonify({"error": str(e)}), 500
 
 def get_parcel_data_batch(zpids):
     """Get parcel data for multiple ZPIDs"""
