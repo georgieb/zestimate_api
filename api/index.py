@@ -261,7 +261,6 @@ def nearby_properties(zpid):
         logger.error(f"Error in nearby properties: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# In the save_portfolio route, modify to only store ZPIDs and metadata
 @app.route('/api/save-portfolio', methods=['POST'])
 def save_portfolio():
     portfolio_data = request.json
@@ -278,153 +277,39 @@ def save_portfolio():
             'timestamp': datetime.now().isoformat()
         }
         
-        if portfolios_collection:
-            # Update or insert portfolio in MongoDB
-            portfolios_collection.update_one(
-                {"name": stored_portfolio['name']},
-                {"$set": stored_portfolio},
-                upsert=True
-            )
+        file_path = os.path.join(os.path.dirname(__file__), 'portfolios.json')
+        try:
+            with open(file_path, 'r') as f:
+                portfolios = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            portfolios = []
+        
+        # Update existing or add new
+        portfolio_index = next((i for i, p in enumerate(portfolios) 
+                              if p['name'] == stored_portfolio['name']), None)
+        
+        if portfolio_index is not None:
+            portfolios[portfolio_index] = stored_portfolio
         else:
-            # Fallback to file storage
-            try:
-                with open('portfolios.json', 'r') as f:
-                    portfolios = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                portfolios = []
-            
-            # Update existing or add new
-            portfolio_index = next((i for i, p in enumerate(portfolios) 
-                                  if p['name'] == stored_portfolio['name']), None)
-            
-            if portfolio_index is not None:
-                portfolios[portfolio_index] = stored_portfolio
-            else:
-                portfolios.append(stored_portfolio)
-            
-            with open('portfolios.json', 'w') as f:
-                json.dump(portfolios, f)
+            portfolios.append(stored_portfolio)
+        
+        with open(file_path, 'w') as f:
+            json.dump(portfolios, f)
         
         return jsonify({"message": "Portfolio saved successfully"}), 200
     except Exception as e:
         logger.error(f"Error saving portfolio: {str(e)}")
         return jsonify({"error": str(e)}), 500
-# Add a new route to load portfolio with fresh data
-@app.route('/api/load-portfolio/<name>', methods=['GET'])
-def load_portfolio(name):
-    try:
-        # Get stored portfolio data
-        if portfolios_collection:
-            stored_portfolio = portfolios_collection.find_one({"name": name}, {'_id': 0})
-        else:
-            try:
-                with open('portfolios.json', 'r') as f:
-                    portfolios = json.load(f)
-                stored_portfolio = next((p for p in portfolios if p['name'] == name), None)
-            except (FileNotFoundError, json.JSONDecodeError):
-                stored_portfolio = None
 
-        if not stored_portfolio:
-            return jsonify({"error": "Portfolio not found"}), 404
-
-        # Fetch fresh data for the stored ZPIDs
-        zpids = stored_portfolio.get('zpids', [])
-        if not zpids:
-            return jsonify({"error": "No properties in portfolio"}), 400
-
-        # Reuse the existing property fetching logic
-        api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
-        all_results = []
-        
-        # Get Zestimate data in batches
-        batch_size = 5
-        for i in range(0, len(zpids), batch_size):
-            batch = zpids[i:i+batch_size]
-            params = {
-                "access_token": API_KEY,
-                "zpid.in": ",".join(batch)
-            }
-            
-            try:
-                response = http.get(api_url, params=params)
-                if response.status_code == 429:
-                    time.sleep(2)
-                    response = http.get(api_url, params=params)
-                    
-                response.raise_for_status()
-                data = response.json()
-                
-                if 'bundle' in data:
-                    all_results.extend(data['bundle'])
-                
-                time.sleep(1.5)
-                
-            except requests.RequestException as e:
-                logger.error(f"Error fetching Zestimate data: {str(e)}")
-                continue
-
-        if all_results:
-            # Get fresh parcel data
-            parcel_data = get_parcel_data_batch([str(r.get('zpid')) for r in all_results])
-            
-            # Process results and merge data
-            processed_results = []
-            for result in all_results:
-                zpid = str(result.get('zpid'))
-                
-                if zpid in parcel_data:
-                    result.update(parcel_data[zpid])
-                
-                zestimate = safe_float(result.get('zestimate'))
-                rental_zestimate = safe_float(result.get('rentalZestimate'))
-                cap_rate = (rental_zestimate * 12 * 0.60 / zestimate * 100) if zestimate != 0 else 0
-                result['capRate'] = cap_rate
-                
-                processed_results.append(result)
-
-            # Calculate fresh portfolio metrics
-            total_value = sum(safe_float(p.get('zestimate')) for p in processed_results)
-            total_rental = sum(safe_float(p.get('rentalZestimate')) for p in processed_results)
-            total_sqft = sum(safe_float(p.get('livingArea', 0)) for p in processed_results)
-            
-            portfolio_data = {
-                'name': stored_portfolio['name'],
-                'timestamp': stored_portfolio['timestamp'],
-                'properties': processed_results,
-                'summary': {
-                    'total_value': total_value,
-                    'total_rental': total_rental,
-                    'avg_cap_rate': sum(safe_float(p.get('capRate', 0)) for p in processed_results) / len(processed_results),
-                    'property_count': len(processed_results),
-                    'total_sqft': total_sqft,
-                    'avg_price_per_sqft': total_value / total_sqft if total_sqft > 0 else 0,
-                    'total_bedrooms': sum(safe_float(p.get('bedrooms', 0)) for p in processed_results),
-                    'total_bathrooms': sum(safe_float(p.get('bathrooms', 0)) for p in processed_results)
-                }
-            }
-            
-            return jsonify(portfolio_data), 200
-
-        return jsonify({"error": "Failed to fetch property data"}), 500
-
-    except Exception as e:
-        logger.error(f"Error loading portfolio: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-    
 @app.route('/api/get-portfolios', methods=['GET'])
 def get_portfolios():
     try:
-        if portfolios_collection:
-            # Get portfolios from MongoDB
-            portfolios = list(portfolios_collection.find({}, {'_id': 0}))
-        else:
-            # Fallback to file storage
-            try:
-                with open('portfolios.json', 'r') as f:
-                    portfolios = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                portfolios = []
-        
+        file_path = os.path.join(os.path.dirname(__file__), 'portfolios.json')
+        try:
+            with open(file_path, 'r') as f:
+                portfolios = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            portfolios = []
         return jsonify(portfolios), 200
     except Exception as e:
         logger.error(f"Error getting portfolios: {str(e)}")
@@ -438,29 +323,24 @@ def delete_portfolio():
         return jsonify({"error": "Portfolio name is required"}), 400
         
     try:
-        if portfolios_collection:
-            # Delete from MongoDB
-            result = portfolios_collection.delete_one({"name": portfolio_name})
-            success = result.deleted_count > 0
-        else:
-            # Fallback to file storage
-            try:
-                with open('portfolios.json', 'r') as f:
-                    portfolios = json.load(f)
+        file_path = os.path.join(os.path.dirname(__file__), 'portfolios.json')
+        try:
+            with open(file_path, 'r') as f:
+                portfolios = json.load(f)
+            
+            original_length = len(portfolios)
+            portfolios = [p for p in portfolios if p.get('name') != portfolio_name]
+            success = len(portfolios) < original_length
+            
+            with open(file_path, 'w') as f:
+                json.dump(portfolios, f)
                 
-                original_length = len(portfolios)
-                portfolios = [p for p in portfolios if p.get('name') != portfolio_name]
-                success = len(portfolios) < original_length
-                
-                with open('portfolios.json', 'w') as f:
-                    json.dump(portfolios, f)
-            except FileNotFoundError:
-                success = False
-        
-        if success:
-            return jsonify({"message": "Portfolio deleted successfully"}), 200
-        return jsonify({"error": "Portfolio not found"}), 404
-        
+            if success:
+                return jsonify({"message": "Portfolio deleted successfully"}), 200
+            return jsonify({"error": "Portfolio not found"}), 404
+            
+        except FileNotFoundError:
+            return jsonify({"error": "No portfolios found"}), 404
     except Exception as e:
         logger.error(f"Error deleting portfolio: {str(e)}")
         return jsonify({"error": str(e)}), 500
