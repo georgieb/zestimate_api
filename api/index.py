@@ -9,30 +9,24 @@ import logging
 import time
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from pymongo import MongoClient
 
 # Setup logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 load_dotenv()
 
-# Initialize Flask app
+# Initialize Flask app for Vercel
 app = Flask(__name__, 
-    template_folder='../templates',
-    static_folder='../static'
+    template_folder='../templates',     # Updated for Vercel
+    static_folder='../static'          # Updated for Vercel
 )
 CORS(app)
 
 # Environment variables
 API_KEY = os.environ.get("API_KEY")
-MONGODB_URI = os.environ.get('MONGODB_URI')
+PORTFOLIO_DATA = os.environ.get("PORTFOLIO_DATA", "[]")  # Store portfolios in env var
 
-# MongoDB setup
-client = MongoClient(MONGODB_URI) if MONGODB_URI else None
-db = client.get_database("property_portfolio") if client else None
-portfolios_collection = db.portfolios if db else None
-
-# Configure retry strategy with backoff
+# Configure retry strategy
 retry_strategy = Retry(
     total=5,
     backoff_factor=2,
@@ -51,6 +45,19 @@ def safe_float(value, default=0.0):
         return float(value)
     except (ValueError, TypeError):
         return default
+
+def get_portfolios_data():
+    """Get portfolios from environment variable"""
+    try:
+        return json.loads(PORTFOLIO_DATA)
+    except json.JSONDecodeError:
+        return []
+
+def update_portfolios_data(portfolios):
+    """Update portfolios in environment variable"""
+    global PORTFOLIO_DATA
+    PORTFOLIO_DATA = json.dumps(portfolios)
+    return True
 
 def get_parcel_data_batch(zpids):
     """Get parcel data for multiple ZPIDs in a single request with improved rate limiting"""
@@ -109,6 +116,8 @@ def get_parcel_data_batch(zpids):
     
     return all_parcel_data
 
+#app routes
+
 @app.route('/')
 def home():
     return render_template('index.html')
@@ -120,6 +129,84 @@ def portfolio():
 @app.route('/static/<path:path>')
 def serve_static(path):
     return send_from_directory('../static', path)
+
+@app.route('/api/save-portfolio', methods=['POST'])
+def save_portfolio():
+    portfolio_data = request.json
+    logger.debug(f"Saving portfolio: {portfolio_data}")
+    
+    if not portfolio_data or not portfolio_data.get('name'):
+        return jsonify({"error": "Portfolio name is required"}), 400
+        
+    try:
+        # Only store essential non-API data
+        stored_portfolio = {
+            'name': portfolio_data['name'],
+            'zpids': portfolio_data['zpids'],
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        portfolios = get_portfolios_data()
+        
+        # Update existing or add new
+        portfolio_index = next((i for i, p in enumerate(portfolios) 
+                              if p['name'] == stored_portfolio['name']), None)
+        
+        if portfolio_index is not None:
+            portfolios[portfolio_index] = stored_portfolio
+        else:
+            portfolios.append(stored_portfolio)
+        
+        update_portfolios_data(portfolios)
+        return jsonify({"message": "Portfolio saved successfully"}), 200
+    except Exception as e:
+        logger.error(f"Error saving portfolio: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+#get, save and delete portfolios
+
+@app.route('/api/get-portfolios', methods=['GET'])
+def get_portfolios():
+    try:
+        portfolios = get_portfolios_data()
+        return jsonify(portfolios), 200
+    except Exception as e:
+        logger.error(f"Error getting portfolios: {str(e)}")
+        return jsonify([]), 200
+
+@app.route('/api/delete-portfolio', methods=['POST'])
+def delete_portfolio():
+    portfolio_name = request.json.get('name')
+    
+    if not portfolio_name:
+        return jsonify({"error": "Portfolio name is required"}), 400
+        
+    try:
+        portfolios = get_portfolios_data()
+        original_length = len(portfolios)
+        portfolios = [p for p in portfolios if p.get('name') != portfolio_name]
+        
+        if len(portfolios) < original_length:
+            update_portfolios_data(portfolios)
+            return jsonify({"message": "Portfolio deleted successfully"}), 200
+        return jsonify({"error": "Portfolio not found"}), 404
+    except Exception as e:
+        logger.error(f"Error deleting portfolio: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/load-portfolio/<name>', methods=['GET'])
+def load_portfolio(name):
+    try:
+        portfolios = get_portfolios_data()
+        stored_portfolio = next((p for p in portfolios if p['name'] == name), None)
+
+        if not stored_portfolio:
+            return jsonify({"error": "Portfolio not found"}), 404
+
+        zpids = stored_portfolio.get('zpids', [])
+        if not zpids:
+            return jsonify({"error": "No properties in portfolio"}), 400
+#API routes
 
 @app.route('/api/properties', methods=['POST'])
 def get_properties():
@@ -260,90 +347,14 @@ def nearby_properties(zpid):
     except Exception as e:
         logger.error(f"Error in nearby properties: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
-@app.route('/api/save-portfolio', methods=['POST'])
-def save_portfolio():
-    portfolio_data = request.json
-    logger.debug(f"Saving portfolio: {portfolio_data}")
     
-    if not portfolio_data or not portfolio_data.get('name'):
-        return jsonify({"error": "Portfolio name is required"}), 400
-        
-    try:
-        # Only store essential non-API data
-        stored_portfolio = {
-            'name': portfolio_data['name'],
-            'zpids': portfolio_data['zpids'],
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        file_path = os.path.join(os.path.dirname(__file__), 'portfolios.json')
-        try:
-            with open(file_path, 'r') as f:
-                portfolios = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            portfolios = []
-        
-        # Update existing or add new
-        portfolio_index = next((i for i, p in enumerate(portfolios) 
-                              if p['name'] == stored_portfolio['name']), None)
-        
-        if portfolio_index is not None:
-            portfolios[portfolio_index] = stored_portfolio
-        else:
-            portfolios.append(stored_portfolio)
-        
-        with open(file_path, 'w') as f:
-            json.dump(portfolios, f)
-        
-        return jsonify({"message": "Portfolio saved successfully"}), 200
     except Exception as e:
-        logger.error(f"Error saving portfolio: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/get-portfolios', methods=['GET'])
-def get_portfolios():
-    try:
-        file_path = os.path.join(os.path.dirname(__file__), 'portfolios.json')
-        try:
-            with open(file_path, 'r') as f:
-                portfolios = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            portfolios = []
-        return jsonify(portfolios), 200
-    except Exception as e:
-        logger.error(f"Error getting portfolios: {str(e)}")
-        return jsonify([]), 200
-
-@app.route('/api/delete-portfolio', methods=['POST'])
-def delete_portfolio():
-    portfolio_name = request.json.get('name')
-    
-    if not portfolio_name:
-        return jsonify({"error": "Portfolio name is required"}), 400
-        
-    try:
-        file_path = os.path.join(os.path.dirname(__file__), 'portfolios.json')
-        try:
-            with open(file_path, 'r') as f:
-                portfolios = json.load(f)
-            
-            original_length = len(portfolios)
-            portfolios = [p for p in portfolios if p.get('name') != portfolio_name]
-            success = len(portfolios) < original_length
-            
-            with open(file_path, 'w') as f:
-                json.dump(portfolios, f)
-                
-            if success:
-                return jsonify({"message": "Portfolio deleted successfully"}), 200
-            return jsonify({"error": "Portfolio not found"}), 404
-            
-        except FileNotFoundError:
-            return jsonify({"error": "No portfolios found"}), 404
-    except Exception as e:
-        logger.error(f"Error deleting portfolio: {str(e)}")
+        logger.error(f"Error loading portfolio: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # Required for Vercel
 app.debug = True
+
+# For local development
+if __name__ == '__main__':
+    app.run(port=5001)
