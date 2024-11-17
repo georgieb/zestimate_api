@@ -1,4 +1,3 @@
-]# api/index.py
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
 import os
@@ -8,40 +7,75 @@ import json
 from datetime import datetime
 import logging
 import sys
+import traceback
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Logging setup
+# Enhanced logging
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
-app = Flask(__name__
-            )
-CORS(app)
+try:
+    # Initialize Flask app
+    logger.debug("Initializing Flask app")
+    app = Flask(__name__)
+    CORS(app)
 
-# Load environment variables
-load_dotenv()
-API_KEY = os.environ.get("API_KEY")
+    # Load environment variables
+    logger.debug("Loading environment variables")
+    load_dotenv()
+    API_KEY = os.environ.get("API_KEY")
 
-if not API_KEY:
-    logger.error("API_KEY environment variable is not set!")
-    raise ValueError("API_KEY environment variable is required")
+    if not API_KEY:
+        logger.error("API_KEY is not set!")
+    else:
+        logger.debug(f"API_KEY found with length: {len(API_KEY)}")
 
-# Configure retry strategy
-retry_strategy = Retry(
-    total=5,
-    backoff_factor=2,
-    status_forcelist=[429, 500, 502, 503, 504]
-)
-adapter = HTTPAdapter(max_retries=retry_strategy)
-http = requests.Session()
-http.mount("https://", adapter)
-http.mount("http://", adapter)
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=5,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504]
+    )
+
+    # Setup requests session
+    http = requests.Session()
+    http.mount("https://", HTTPAdapter(max_retries=retry_strategy))
+    http.mount("http://", HTTPAdapter(max_retries=retry_strategy))
+
+    @app.route('/api/test', methods=['GET'])
+    def test_route():
+        """Test route to verify app is working"""
+        try:
+            return jsonify({
+                "status": "ok",
+                "api_key_present": bool(API_KEY),
+                "api_key_length": len(API_KEY) if API_KEY else 0,
+                "environment": dict(os.environ)
+            })
+        except Exception as e:
+            logger.error(f"Error in test route: {str(e)}")
+            logger.error(traceback.format_exc())
+            return jsonify({"error": str(e)}), 500
+
+    @app.route('/api/properties', methods=['POST'])
+    def get_properties():
+        logger.debug("Properties endpoint hit")
+        try:
+            # Log request details
+            logger.debug(f"Request Headers: {dict(request.headers)}")
+            logger.debug(f"Request Body: {request.get_data(as_text=True)}")
+            
+            # Get ZPIDs from request
+            zpid_list = request.json.get('zpids', [])
+            if not zpid_list:
+                return jsonify({"error": "No ZPIDs provided"}), 400
+
+            logger.debug(f"Processing ZPIDs: {zpid_list}")
 
 def safe_float(value, default=0.0):
     """Safely convert value to float"""
@@ -210,15 +244,15 @@ def get_properties():
         
         return jsonify({"error": "No results found"}), 404
 
-    except Exception as e:
-        logger.error(f"Error in get_properties: {str(e)}")
-        logger.exception("Full traceback:")
-        return jsonify({
-            "error": "Internal server error",
-            "details": str(e),
-            "type": type(e).__name__
-        }), 500
-
+       except Exception as e:
+            logger.error(f"Error in get_properties: {str(e)}")
+            logger.error(traceback.format_exc())
+            return jsonify({
+                "error": "Internal server error",
+                "message": str(e),
+                "traceback": traceback.format_exc()
+            }), 500
+    
 @app.route('/api/nearby-properties/<zpid>')
 def nearby_properties(zpid):
     """Get nearby properties endpoint"""
@@ -314,15 +348,22 @@ def not_found_error(error):
         "available_routes": [str(rule) for rule in app.url_map.iter_rules()]
     }), 404
 
-@app.errorhandler(Exception)
-def handle_exception(error):
-    logger.error(f"Unhandled exception: {str(error)}")
-    logger.exception("Full traceback:")
-    return jsonify({
-        "error": "Internal server error",
-        "details": str(error),
-        "type": type(error).__name__
-    }), 500
+   # Generic error handler
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        logger.error(f"Unhandled exception: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            "error": "Internal server error",
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
 
-# For Vercel
-app = app.wsgi_app
+    # For Vercel
+    app = app.wsgi_app
+
+except Exception as e:
+    # Log any initialization errors
+    print(f"Initialization error: {str(e)}")
+    print(traceback.format_exc())
+    raise e
