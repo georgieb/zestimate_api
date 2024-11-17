@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="max-w-6xl mx-auto bg-white rounded-lg shadow p-6">
+    <h1 class="text-2xl font-bold mb-6">Cap Rate Analysis Results</h1>
+    <a href="{{ url_for('home') }}" class="text-blue-600 hover:text-blue-800 mb-4 inline-block">← Back to Calculator</a>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm text-left text-gray-500">
+            <thead class="text-xs text-gray-700 uppercase bg-gray-50">
+                <tr>
+                    <th scope="col" class="px-6 py-3">Address</th>
+                    <th scope="col" class="px-6 py-3 text-right">Zestimate</th>
+                    <th scope="col" class="px-6 py-3 text-right">Rental Estimate</th>
+                    <th scope="col" class="px-6 py-3 text-right">Cap Rate</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for property in properties %}
+                <tr class="bg-white border-b">
+                    <td class="px-6 py-4">{{ property.address }}</td>
+                    <td class="px-6 py-4 text-right">${{ "{:,.0f}".format(property.zestimate) }}</td>
+                    <td class="px-6 py-4 text-right">${{ "{:,.0f}".format(property.rentalZestimate) }}</td>
+                    <td class="px-6 py-4 text-right">{{ property.capRate }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,76 @@
+<!-- templates/index.html -->
+{% extends "base.html" %}
+{% block content %}
+<div class="grid grid-cols-1 gap-6">
+    <!-- Input Section -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Portfolio Input -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-xl font-bold mb-4">Add Properties</h2>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700">Portfolio Name</label>
+                <input type="text" id="portfolioName" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+            </div>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700">ZPIDs (comma-separated)</label>
+                <textarea id="zpidInput" rows="3" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500" placeholder="Enter ZPIDs separated by commas"></textarea>
+            </div>
+            <div class="flex space-x-2">
+                <button id="analyzeBtn" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">Analyze Portfolio</button>
+                <button id="savePortfolioBtn" class="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700">Save Portfolio</button>
+            </div>
+        </div>
+
+        <!-- Portfolio Summary -->
+        <div class="bg-white rounded-lg shadow p-6">
+            <h2 class="text-xl font-bold mb-4">Portfolio Summary</h2>
+            <div id="portfolioSummary" class="grid grid-cols-2 gap-4">
+                <div class="bg-blue-50 p-4 rounded-lg">
+                    <h3 class="text-sm font-medium text-blue-800">Total Value</h3>
+                    <p id="totalValue" class="text-2xl font-bold text-blue-900">$0</p>
+                </div>
+                <div class="bg-green-50 p-4 rounded-lg">
+                    <h3 class="text-sm font-medium text-green-800">Total Monthly Rental</h3>
+                    <p id="totalRental" class="text-2xl font-bold text-green-900">$0</p>
+                </div>
+                <div class="bg-purple-50 p-4 rounded-lg">
+                    <h3 class="text-sm font-medium text-purple-800">Average Cap Rate</h3>
+                    <p id="avgCapRate" class="text-2xl font-bold text-purple-900">0%</p>
+                </div>
+                <div class="bg-yellow-50 p-4 rounded-lg">
+                    <h3 class="text-sm font-medium text-yellow-800">Property Count</h3>
+                    <p id="propertyCount" class="text-2xl font-bold text-yellow-900">0</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Property List -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-xl font-bold mb-4">Property Details</h2>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4">Address</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Zestimate</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Rental Est.</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Cap Rate</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Beds/Baths</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Sqft</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">$/Sqft</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Year Built</th>
+                    </tr>
+                </thead>
+                <tbody id="propertyList" class="bg-white divide-y divide-gray-200"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Map View -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-xl font-bold mb-4">Property Locations</h2>
+        <div id="map" class="h-96 rounded-lg"></div>
+    </div>
+</div>
+{% endblock %}
