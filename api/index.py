@@ -46,19 +46,19 @@ http = requests.Session()
 http.mount("https://", HTTPAdapter(max_retries=retry_strategy))
 http.mount("http://", HTTPAdapter(max_retries=retry_strategy))
 
-def safe_float(value, default=0.0):
-    """Safely convert value to float"""
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return default
-
 @app.route('/api/test', methods=['GET'])
 def test_route():
     """Test route to verify app is working"""
     try:
+        def safe_float(value, default=0.0):
+            """Safely convert value to float"""
+            if value is None:
+                return default
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return default
+
         return jsonify({
             "status": "ok",
             "api_key_present": bool(API_KEY),
