@@ -94,6 +94,108 @@ def get_parcel_data_batch(zpids):
     
     return all_parcel_data
 
+
+
+def get_parcel_square_footage(parcel_id):
+    """Get Zillow Calculated Finished Area for a parcel"""
+    url = f"https://api.bridgedataoutput.com/api/v2/pub/parcels/{parcel_id}"
+    params = {'access_token': API_KEY}
+    
+    try:
+        response = http.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        if 'bundle' in data and 'areas' in data['bundle']:
+            # Look specifically for Zillow Calculated Finished Area
+            for area in data['bundle']['areas']:
+                if area.get('type') == 'Zillow Calculated Finished Area':
+                    return area.get('areaSquareFeet')
+        return None
+    except Exception as e:
+        logger.error(f"Error getting parcel square footage: {str(e)}")
+        return None
+
+@app.route('/api/nearby-transactions', methods=['GET'])
+def get_nearby_transactions():
+    """Get nearby property transactions with square footage data"""
+    address = request.args.get('address')
+    radius = request.args.get('radius', '0.5')
+    limit = request.args.get('limit', '10')
+    
+    if not address:
+        return jsonify({"error": "Address is required"}), 400
+        
+    try:
+        # Get transactions
+        url = "https://api.bridgedataoutput.com/api/v2/pub/transactions"
+        params = {
+            'access_token': API_KEY,
+            'limit': limit,
+            'sortBy': 'recordingDate',
+            'order': 'desc',
+            'near': address,
+            'radius': radius
+        }
+        
+        logger.debug(f"Fetching transactions near: {address}")
+        response = http.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        if not data.get('bundle'):
+            return jsonify({"error": "No transactions found"}), 404
+            
+        transactions = data['bundle']
+        processed_transactions = []
+        
+        for transaction in transactions:
+            # Get square footage for each property
+            square_feet = None
+            if 'parcels' in transaction and transaction['parcels']:
+                parcel = transaction['parcels'][0] if isinstance(transaction['parcels'], list) else transaction['parcels']
+                if parcel and 'parcelID' in parcel:
+                    square_feet = get_parcel_square_footage(parcel['parcelID'])
+            
+            # Process transaction data
+            processed_transaction = {
+                'recordingDate': transaction.get('recordingDate'),
+                'salesPrice': transaction.get('salesPrice'),
+                'documentType': transaction.get('documentType'),
+                'category': transaction.get('category'),
+                'squareFeet': square_feet,
+                'pricePerSqFt': round(transaction.get('salesPrice', 0) / square_feet, 2) if square_feet and transaction.get('salesPrice') else None,
+                'address': parcel.get('full') if parcel else None,
+                'city': parcel.get('city') if parcel else None,
+                'state': parcel.get('state') if parcel else None,
+                'buyerName': transaction.get('buyerName'),
+                'sellerName': transaction.get('sellerName'),
+                'loanAmount': transaction.get('loanAmount')
+            }
+            
+            processed_transactions.append(processed_transaction)
+        
+        # Calculate summary statistics
+        sales_transactions = [t for t in processed_transactions if t['salesPrice'] is not None]
+        sqft_transactions = [t for t in sales_transactions if t['squareFeet'] is not None]
+        
+        summary = {
+            'totalTransactions': len(processed_transactions),
+            'salesTransactions': len(sales_transactions),
+            'averagePrice': sum(t['salesPrice'] for t in sales_transactions) / len(sales_transactions) if sales_transactions else 0,
+            'medianPrice': sorted([t['salesPrice'] for t in sales_transactions])[len(sales_transactions)//2] if sales_transactions else 0,
+            'averageSquareFeet': sum(t['squareFeet'] for t in sqft_transactions) / len(sqft_transactions) if sqft_transactions else 0,
+            'averagePricePerSqFt': sum(t['pricePerSqFt'] for t in sqft_transactions) / len(sqft_transactions) if sqft_transactions else 0
+        }
+        
+        return jsonify({
+            'transactions': processed_transactions,
+            'summary': summary
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching nearby transactions: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 @app.route('/')
 def home():
     """Render the main dashboard page"""
@@ -103,6 +205,11 @@ def home():
 def portfolio():
     """Render the portfolios list page"""
     return render_template('portfolio.html')
+
+@app.route('/transactions')
+def transactions():
+    """Render the transactions search page"""
+    return render_template('transactions.html')
 
 @app.route('/api/properties', methods=['POST'])
 def get_properties():
