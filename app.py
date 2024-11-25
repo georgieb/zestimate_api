@@ -2,17 +2,13 @@ from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
 import os
 import requests
-import pandas as pd
+from dotenv import load_dotenv
+import json
 from datetime import datetime
 import logging
 import time
 from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from dotenv import load_dotenv
-import json
-import sqlite3
-from dataclasses import dataclass
-from typing import Optional, List
+from urllib3.util.retry import Retry  # Fixed import
 
 # Setup logging and load environment variables
 logging.basicConfig(level=logging.DEBUG)
@@ -46,283 +42,254 @@ def safe_float(value, default=0.0):
     except (ValueError, TypeError):
         return default
 
-class BridgeTransactions:
-    def __init__(self):
-        self.api_key = API_KEY
-        if not self.api_key:
-            raise ValueError("Missing API_KEY in environment variables")
-
-    def get_parcel_details(self, parcel_id):
-        """Get building and lot details for a parcel"""
-        url = f"https://api.bridgedataoutput.com/api/v2/pub/parcels/{parcel_id}"
-        params = {'access_token': self.api_key}
+def get_parcel_data_batch(zpids):
+    """Get parcel data for multiple ZPIDs in a single request"""
+    url = "https://api.bridgedataoutput.com/api/v2/pub/parcels"
+    
+    chunk_size = 10
+    all_parcel_data = {}
+    
+    for i in range(0, len(zpids), chunk_size):
+        chunk = zpids[i:i + chunk_size]
+        params = {
+            "access_token": API_KEY,
+            "zpid.in": ",".join(chunk)
+        }
         
         try:
+            logger.debug(f"Fetching parcel data for ZPIDs: {chunk}")
             response = http.get(url, params=params)
             response.raise_for_status()
             data = response.json()
             
-            result = {
-                'finished_sqft': None,
-                'lot_size_sqft': None,
-                'bedrooms': None,
-                'bathrooms': None,
-                'yearBuilt': None,
-                'propertyType': None,
-                'zestimate': None,
-                'taxAssessedValue': None
-            }
+            if 'bundle' in data and data['bundle']:
+                for parcel in data['bundle']:
+                    zpid = str(parcel.get('zpid'))
+                    all_parcel_data[zpid] = {
+                        'bedrooms': safe_float(parcel.get('BedroomsCount')),
+                        'bathrooms': safe_float(parcel.get('BathroomsTotalCount')),
+                        'lotSize': safe_float(parcel.get('LotSizeSquareFeet')),
+                        'yearBuilt': parcel.get('YearBuilt'),
+                        'livingArea': safe_float(parcel.get('BuildingAreaSqFt')),
+                        'propertyType': parcel.get('PropertyTypeName'),
+                        'lastSalePrice': safe_float(parcel.get('LastSalePrice')),
+                        'lastSaleDate': parcel.get('LastSaleDate'),
+                        'stories': safe_float(parcel.get('StoriesCount')),
+                        'parkingSpaces': safe_float(parcel.get('ParkingSpaces')),
+                        'taxAssessedValue': safe_float(parcel.get('TaxAssessedValue')),
+                        'taxYear': parcel.get('TaxYear'),
+                        'propertyTax': safe_float(parcel.get('TaxAmount')),
+                        'constructionType': parcel.get('ConstructionType'),
+                        'roofType': parcel.get('RoofType'),
+                        'foundation': parcel.get('Foundation'),
+                        'zoning': parcel.get('Zoning')
+                    }
             
-            if 'bundle' in data:
-                bundle = data['bundle']
-                if 'areas' in bundle:
-                    for area in bundle['areas']:
-                        if area.get('type') == 'Zillow Calculated Finished Area':
-                            result['finished_sqft'] = area.get('areaSquareFeet')
-                
-                if 'lot' in bundle:
-                    lot_data = bundle['lot']
-                    if 'lotSizeSquareFeet' in lot_data:
-                        result['lot_size_sqft'] = lot_data['lotSizeSquareFeet']
-                    elif 'lotSizeAcres' in lot_data:
-                        result['lot_size_sqft'] = lot_data['lotSizeAcres'] * 43560
-                
-                result['bedrooms'] = safe_float(bundle.get('BedroomsCount'))
-                result['bathrooms'] = safe_float(bundle.get('BathroomsTotalCount'))
-                result['yearBuilt'] = bundle.get('YearBuilt')
-                result['propertyType'] = bundle.get('PropertyTypeName')
-                result['taxAssessedValue'] = safe_float(bundle.get('TaxAssessedValue'))
+            # Add delay between batches to avoid rate limiting
+            time.sleep(1)
             
-            return result
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error getting parcel details: {e}")
-            return result
+        except Exception as e:
+            logger.error(f"Error fetching parcel data batch: {str(e)}")
+            continue
+    
+    return all_parcel_data
 
-    def get_zillow_link(self, address, city, state):
-        """Generate Zillow search link for property"""
-        search_address = f"{address}, {city}, {state}".replace(' ', '-')
-        return f"https://www.zillow.com/homes/{search_address}_rb/"
+@app.route('/')
+def home():
+    """Render the main dashboard page"""
+    return render_template('index.html')
 
-    def get_transactions_near(self, location, radius="0.5", limit=10):
-        """Get transactions near a location"""
-        logger.debug(f"Fetching transactions near: {location}")
-        
+@app.route('/portfolio')
+def portfolio():
+    """Render the portfolios list page"""
+    return render_template('portfolio.html')
+
+@app.route('/api/properties', methods=['POST'])
+def get_properties():
+    zpid_list = request.json.get('zpids', [])
+    logger.debug(f"Received request for ZPIDs: {zpid_list}")
+    
+    if not zpid_list:
+        return jsonify({"error": "No ZPIDs provided"}), 400
+
+    api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
+    all_results = []
+    
+    # Get Zestimate data in batches
+    batch_size = 8
+    for i in range(0, len(zpid_list), batch_size):
+        batch = zpid_list[i:i+batch_size]
         params = {
-            'access_token': self.api_key,
-            'limit': limit,
-            'sortBy': 'recordingDate',
-            'order': 'desc',
-            'near': location,
-            'radius': radius
+            "access_token": API_KEY,
+            "zpid.in": ",".join(batch)
         }
         
         try:
-            response = http.get(
-                "https://api.bridgedataoutput.com/api/v2/pub/transactions",
-                params=params
-            )
+            response = http.get(api_url, params=params)
             response.raise_for_status()
             data = response.json()
             
-            transactions = []
-            
             if 'bundle' in data:
-                for item in data['bundle']:
-                    if 'parcels' not in item or not item['parcels']:
-                        continue
-                        
-                    parcel = item['parcels'][0] if isinstance(item['parcels'], list) else item['parcels']
-                    if not isinstance(parcel, dict):
-                        continue
-                        
-                    # Get property details including Zestimate data
-                    details = self.get_parcel_details(parcel.get('parcelID', ''))
-                    
-                    # Calculate price metrics
-                    price = item.get('salesPrice')
-                    square_feet = details['finished_sqft']
-                    lot_size = details['lot_size_sqft']
-                    
-                    price_per_sqft = None
-                    if price and square_feet:
-                        price_per_sqft = price / square_feet
-                        
-                    price_per_lot_sqft = None
-                    if price and lot_size:
-                        price_per_lot_sqft = price / lot_size
-                    
-                    # Generate Zillow link
-                    zillow_link = self.get_zillow_link(
-                        parcel.get('full', ''),
-                        parcel.get('city', ''),
-                        parcel.get('state', '')
-                    )
-                    
-                    transaction = {
-                        'parcel_id': parcel.get('parcelID', ''),
-                        'address': parcel.get('full', ''),
-                        'city': parcel.get('city', ''),
-                        'state': parcel.get('state', ''),
-                        'price': price,
-                        'square_feet': square_feet,
-                        'lot_size_sqft': lot_size,
-                        'price_per_sqft': price_per_sqft,
-                        'price_per_lot_sqft': price_per_lot_sqft,
-                        'recording_date': item.get('recordingDate', ''),
-                        'document_type': item.get('documentType', ''),
-                        'transaction_type': item.get('category', ''),
-                        'buyer_name': ', '.join(item['buyerName']) if isinstance(item.get('buyerName'), list) else item.get('buyerName', ''),
-                        'seller_name': ', '.join(item['sellerName']) if isinstance(item.get('sellerName'), list) else item.get('sellerName', ''),
-                        'zillow_link': zillow_link,
-                        'bedrooms': details['bedrooms'],
-                        'bathrooms': details['bathrooms'],
-                        'year_built': details['yearBuilt'],
-                        'property_type': details['propertyType'],
-                        'tax_assessed_value': details['taxAssessedValue']
-                    }
-                    
-                    transactions.append(transaction)
+                all_results.extend(data['bundle'])
             
-            return transactions
+            # Add delay between batches
+            time.sleep(1)
             
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error getting transactions: {e}")
-            return []
+        except requests.RequestException as e:
+            logger.error(f"Error fetching Zestimate data: {str(e)}")
+            return jsonify({"error": str(e)}), 500
 
-# Initialize database
-def init_db():
-    with sqlite3.connect('real_estate.db') as conn:
-        conn.execute('''
-        CREATE TABLE IF NOT EXISTS searches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            location TEXT,
-            radius TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-        ''')
+    if all_results:
+        # Get parcel data for all properties in batch
+        parcel_data = get_parcel_data_batch([str(r.get('zpid')) for r in all_results])
         
-        conn.execute('''
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            search_id INTEGER,
-            parcel_id TEXT,
-            address TEXT,
-            city TEXT,
-            state TEXT,
-            price REAL,
-            square_feet REAL,
-            lot_size_sqft REAL,
-            price_per_sqft REAL,
-            price_per_lot_sqft REAL,
-            recording_date DATE,
-            document_type TEXT,
-            transaction_type TEXT,
-            buyer_name TEXT,
-            seller_name TEXT,
-            zillow_link TEXT,
-            bedrooms REAL,
-            bathrooms REAL,
-            year_built INTEGER,
-            property_type TEXT,
-            tax_assessed_value REAL,
-            FOREIGN KEY (search_id) REFERENCES searches (id)
-        )
-        ''')
-
-init_db()
-
-# Routes
-@app.route('/')
-def home():
-    return render_template('index.html')
-
-@app.route('/api/transactions', methods=['GET'])
-def get_transactions():
-    location = request.args.get('location')
-    radius = request.args.get('radius', '0.5')
-    limit = request.args.get('limit', '10')
-    
-    if not location:
-        return jsonify({"error": "Location is required"}), 400
-    
-    try:
-        api = BridgeTransactions()
-        transactions = api.get_transactions_near(location, radius, int(limit))
-        
-        # Save to database
-        with sqlite3.connect('real_estate.db') as conn:
-            cursor = conn.execute(
-                'INSERT INTO searches (location, radius) VALUES (?, ?)',
-                (location, radius)
-            )
-            search_id = cursor.lastrowid
+        # Process results and merge data
+        processed_results = []
+        for result in all_results:
+            zpid = str(result.get('zpid'))
             
-            for t in transactions:
-                conn.execute('''
-                    INSERT INTO transactions (
-                        search_id, parcel_id, address, city, state, price,
-                        square_feet, lot_size_sqft, price_per_sqft, price_per_lot_sqft,
-                        recording_date, document_type, transaction_type,
-                        buyer_name, seller_name, zillow_link, bedrooms,
-                        bathrooms, year_built, property_type, tax_assessed_value
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    search_id, t['parcel_id'], t['address'], t['city'], t['state'],
-                    t['price'], t['square_feet'], t['lot_size_sqft'],
-                    t['price_per_sqft'], t['price_per_lot_sqft'], t['recording_date'],
-                    t['document_type'], t['transaction_type'], t['buyer_name'],
-                    t['seller_name'], t['zillow_link'], t['bedrooms'], t['bathrooms'],
-                    t['year_built'], t['property_type'], t['tax_assessed_value']
-                ))
+            # Merge parcel data if available
+            if zpid in parcel_data:
+                result.update(parcel_data[zpid])
+            
+            # Calculate financial metrics
+            zestimate = safe_float(result.get('zestimate'))
+            rental_zestimate = safe_float(result.get('rentalZestimate'))
+            cap_rate = (rental_zestimate * 12 * 0.60 / zestimate * 100) if zestimate != 0 else 0
+            result['capRate'] = cap_rate
+            
+            processed_results.append(result)
+
+        # Calculate portfolio metrics
+        total_value = sum(safe_float(p.get('zestimate')) for p in processed_results)
+        total_rental = sum(safe_float(p.get('rentalZestimate')) for p in processed_results)
+        total_sqft = sum(safe_float(p.get('livingArea', 0)) for p in processed_results)
         
-        # Calculate summary statistics
-        if transactions:
-            summary = {
-                'total_transactions': len(transactions),
-                'average_price': sum(t['price'] for t in transactions if t['price']) / len([t for t in transactions if t['price']]),
-                'average_sqft': sum(t['square_feet'] for t in transactions if t['square_feet']) / len([t for t in transactions if t['square_feet']]),
-                'average_price_per_sqft': sum(t['price_per_sqft'] for t in transactions if t['price_per_sqft']) / len([t for t in transactions if t['price_per_sqft']]),
-                'average_lot_size': sum(t['lot_size_sqft'] for t in transactions if t['lot_size_sqft']) / len([t for t in transactions if t['lot_size_sqft']])
+        portfolio_metrics = {
+            'properties': processed_results,
+            'summary': {
+                'total_value': total_value,
+                'total_rental': total_rental,
+                'avg_cap_rate': sum(p['capRate'] for p in processed_results) / len(processed_results),
+                'property_count': len(processed_results),
+                'total_sqft': total_sqft,
+                'avg_price_per_sqft': total_value / total_sqft if total_sqft > 0 else 0,
+                'total_bedrooms': sum(safe_float(p.get('bedrooms', 0)) for p in processed_results),
+                'total_bathrooms': sum(safe_float(p.get('bathrooms', 0)) for p in processed_results)
             }
-        else:
-            summary = {}
+        }
         
-        return jsonify({
-            'transactions': transactions,
-            'summary': summary
-        }), 200
+        return jsonify(portfolio_metrics), 200
+    
+    return jsonify({"error": "No results found"}), 404
+
+@app.route('/api/nearby-properties/<zpid>', methods=['GET'])
+def nearby_properties(zpid):
+    try:
+        logger.debug(f"Fetching nearby properties for ZPID: {zpid}")
+        api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
+        params = {
+            "access_token": API_KEY,
+            "zpid": zpid
+        }
+        
+        response = http.get(api_url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        if 'bundle' in data and len(data['bundle']) > 0:
+            property_data = data['bundle'][0]
+            latitude = property_data.get('Latitude')
+            longitude = property_data.get('Longitude')
+            
+            if latitude and longitude:
+                params = {
+                    "access_token": API_KEY,
+                    "near": f"{longitude},{latitude}",
+                    "limit": 200
+                }
+                
+                response = http.get(api_url, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                if 'bundle' in data:
+                    return jsonify(data['bundle']), 200
+                
+        return jsonify({"error": "Property coordinates not found"}), 404
         
     except Exception as e:
-        logger.error(f"Error in get_transactions: {str(e)}")
+        logger.error(f"Error in nearby properties: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/comps/<parcel_id>')
-def get_comps(parcel_id):
+@app.route('/api/save-portfolio', methods=['POST'])
+def save_portfolio():
+    portfolio_data = request.json
+    logger.debug(f"Saving portfolio: {portfolio_data}")
+    
+    if not portfolio_data or not portfolio_data.get('name'):
+        return jsonify({"error": "Portfolio name is required"}), 400
+        
     try:
-        with sqlite3.connect('real_estate.db') as conn:
-            conn.row_factory = sqlite3.Row
-            property_data = conn.execute(
-                'SELECT * FROM transactions WHERE parcel_id = ?',
-                (parcel_id,)
-            ).fetchone()
-            
-            if not property_data:
-                return jsonify({'error': 'Property not found'}), 404
-            
-            api = BridgeTransactions()
-            comps = api.get_transactions_near(
-                f"{property_data['address']}, {property_data['city']}, {property_data['state']}",
-                radius="0.5",
-                limit=5
-            )
-            
-            return jsonify({
-                'property': dict(property_data),
-                'comps': comps
-            }), 200
-            
+        try:
+            with open('portfolios.json', 'r') as f:
+                portfolios = json.load(f)
+        except FileNotFoundError:
+            portfolios = []
+        except json.JSONDecodeError:
+            portfolios = []
+        
+        portfolio_data['timestamp'] = datetime.now().isoformat()
+        
+        portfolio_index = next((i for i, p in enumerate(portfolios) 
+                              if p['name'] == portfolio_data['name']), None)
+        
+        if portfolio_index is not None:
+            portfolios[portfolio_index] = portfolio_data
+        else:
+            portfolios.append(portfolio_data)
+        
+        with open('portfolios.json', 'w') as f:
+            json.dump(portfolios, f)
+        
+        return jsonify({"message": "Portfolio saved successfully"}), 200
     except Exception as e:
-        logger.error(f"Error getting comps: {str(e)}")
+        logger.error(f"Error saving portfolio: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/get-portfolios', methods=['GET'])
+def get_portfolios():
+    try:
+        with open('portfolios.json', 'r') as f:
+            portfolios = json.load(f)
+        return jsonify(portfolios), 200
+    except FileNotFoundError:
+        return jsonify([]), 200
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON in portfolios.json")
+        return jsonify([]), 200
+
+@app.route('/api/delete-portfolio', methods=['POST'])
+def delete_portfolio():
+    portfolio_name = request.json.get('name')
+    
+    if not portfolio_name:
+        return jsonify({"error": "Portfolio name is required"}), 400
+        
+    try:
+        with open('portfolios.json', 'r') as f:
+            portfolios = json.load(f)
+            
+        updated_portfolios = [p for p in portfolios if p.get('name') != portfolio_name]
+        
+        with open('portfolios.json', 'w') as f:
+            json.dump(updated_portfolios, f)
+            
+        return jsonify({"message": "Portfolio deleted successfully"}), 200
+    except FileNotFoundError:
+        return jsonify({"error": "No portfolios found"}), 404
+    except Exception as e:
+        logger.error(f"Error deleting portfolio: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
