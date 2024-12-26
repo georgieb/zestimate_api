@@ -46,11 +46,12 @@ def get_parcel_data_batch(zpids):
     """Get parcel data for multiple ZPIDs in a single request"""
     url = "https://api.bridgedataoutput.com/api/v2/pub/parcels"
     
-    chunk_size = 10
+    chunk_size = 10  # API limit per request
     all_parcel_data = {}
     
+    # Process ZPIDs in chunks of 10
     for i in range(0, len(zpids), chunk_size):
-        chunk = zpids[i:i + chunk_size]
+        chunk = zpids[i:i + chunk_size]  # This gets elements i through i+10
         params = {
             "access_token": API_KEY,
             "zpid.in": ",".join(chunk)
@@ -60,38 +61,42 @@ def get_parcel_data_batch(zpids):
             logger.debug(f"Fetching parcel data for ZPIDs: {chunk}")
             response = http.get(url, params=params)
             response.raise_for_status()
+            
             data = response.json()
             
             if 'bundle' in data and data['bundle']:
                 for parcel in data['bundle']:
                     zpid = str(parcel.get('zpid'))
+                    building = parcel.get('building', [{}])[0]
+                    
+                    # Get area info
+                    living_area = next((area['areaSquareFeet'] for area in parcel.get('areas', []) 
+                                     if area.get('type') == 'Living Building Area'), None)
+                    
                     all_parcel_data[zpid] = {
-                        'bedrooms': safe_float(parcel.get('BedroomsCount')),
-                        'bathrooms': safe_float(parcel.get('BathroomsTotalCount')),
-                        'lotSize': safe_float(parcel.get('LotSizeSquareFeet')),
-                        'yearBuilt': parcel.get('YearBuilt'),
-                        'livingArea': safe_float(parcel.get('BuildingAreaSqFt')),
-                        'propertyType': parcel.get('PropertyTypeName'),
-                        'lastSalePrice': safe_float(parcel.get('LastSalePrice')),
-                        'lastSaleDate': parcel.get('LastSaleDate'),
-                        'stories': safe_float(parcel.get('StoriesCount')),
-                        'parkingSpaces': safe_float(parcel.get('ParkingSpaces')),
-                        'taxAssessedValue': safe_float(parcel.get('TaxAssessedValue')),
-                        'taxYear': parcel.get('TaxYear'),
-                        'propertyTax': safe_float(parcel.get('TaxAmount')),
-                        'constructionType': parcel.get('ConstructionType'),
-                        'roofType': parcel.get('RoofType'),
-                        'foundation': parcel.get('Foundation'),
-                        'zoning': parcel.get('Zoning')
+                        'bedrooms': safe_float(building.get('bedrooms')),
+                        'bathrooms': safe_float(building.get('fullBaths')),
+                        'lotSize': safe_float(parcel.get('lotSizeSquareFeet')),
+                        'yearBuilt': building.get('yearBuilt'),
+                        'livingArea': safe_float(living_area),
+                        'propertyType': parcel.get('landUseDescription'),
+                        'stories': safe_float(building.get('totalStories')),
+                        'foundation': building.get('foundation'),
+                        'constructionType': None,
+                        'roofType': None,
+                        'zoning': parcel.get('zoningDescription'),
+                        'parkingSpaces': len(parcel.get('garages', [])),
+                        'totalRooms': safe_float(building.get('totalRooms'))
                     }
             
-            # Add delay between batches to avoid rate limiting
-            time.sleep(1)
+            logger.debug(f"Processed chunk {i//chunk_size + 1}, total data points so far: {len(all_parcel_data)}")
+            time.sleep(1)  # Rate limiting between chunks
             
         except Exception as e:
-            logger.error(f"Error fetching parcel data batch: {str(e)}")
+            logger.error(f"Error fetching parcel data batch starting at index {i}: {str(e)}")
             continue
     
+    logger.debug(f"Completed processing all chunks. Total properties: {len(all_parcel_data)}")
     return all_parcel_data
 
 @app.route('/')
@@ -107,7 +112,7 @@ def portfolio():
 @app.route('/api/properties', methods=['POST'])
 def get_properties():
     zpid_list = request.json.get('zpids', [])
-    logger.debug(f"Received request for ZPIDs: {zpid_list}")
+    logger.debug(f"Received request for {len(zpid_list)} ZPIDs")
     
     if not zpid_list:
         return jsonify({"error": "No ZPIDs provided"}), 400
@@ -115,10 +120,12 @@ def get_properties():
     api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
     all_results = []
     
-    # Get Zestimate data in batches
+    # Process Zestimates in batches of 8
     batch_size = 8
     for i in range(0, len(zpid_list), batch_size):
         batch = zpid_list[i:i+batch_size]
+        logger.debug(f"Processing Zestimate batch {i//batch_size + 1} with {len(batch)} ZPIDs")
+        
         params = {
             "access_token": API_KEY,
             "zpid.in": ",".join(batch)
@@ -131,13 +138,15 @@ def get_properties():
             
             if 'bundle' in data:
                 all_results.extend(data['bundle'])
+                logger.debug(f"Added {len(data['bundle'])} results, total so far: {len(all_results)}")
             
-            # Add delay between batches
-            time.sleep(1)
+            time.sleep(1)  # Rate limiting between batches
             
         except requests.RequestException as e:
-            logger.error(f"Error fetching Zestimate data: {str(e)}")
-            return jsonify({"error": str(e)}), 500
+            logger.error(f"Error fetching Zestimate batch starting at index {i}: {str(e)}")
+            continue
+
+    logger.debug(f"Completed Zestimate fetching. Total properties: {len(all_results)}")
 
     if all_results:
         # Get parcel data for all properties in batch
@@ -188,6 +197,8 @@ def nearby_properties(zpid):
     try:
         logger.debug(f"Fetching nearby properties for ZPID: {zpid}")
         api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
+        
+        # First get the target property's details
         params = {
             "access_token": API_KEY,
             "zpid": zpid
@@ -203,6 +214,7 @@ def nearby_properties(zpid):
             longitude = property_data.get('Longitude')
             
             if latitude and longitude:
+                # Get nearby properties
                 params = {
                     "access_token": API_KEY,
                     "near": f"{longitude},{latitude}",
@@ -214,14 +226,49 @@ def nearby_properties(zpid):
                 data = response.json()
                 
                 if 'bundle' in data:
-                    return jsonify(data['bundle']), 200
+                    nearby_properties = data['bundle']
+                    
+                    # Get parcel data for all nearby properties
+                    zpids = [str(p.get('zpid')) for p in nearby_properties]
+                    parcel_data = get_parcel_data_batch(zpids)
+                    
+                    # Process and merge data
+                    processed_properties = []
+                    for prop in nearby_properties:
+                        zpid = str(prop.get('zpid'))
+                        
+                        # Calculate financial metrics
+                        zestimate = safe_float(prop.get('zestimate'))
+                        rental_zestimate = safe_float(prop.get('rentalZestimate'))
+                        cap_rate = (rental_zestimate * 12 * 0.60 / zestimate * 100) if zestimate != 0 else 0
+                        
+                        # Get property details
+                        details = parcel_data.get(zpid, {})
+                        living_area = safe_float(details.get('livingArea'))
+                        
+                        processed_prop = {
+                            'address': prop.get('address', ''),
+                            'zipcode': prop.get('zipcode', ''),
+                            'zestimate': zestimate,
+                            'rentalZestimate': rental_zestimate,
+                            'capRate': round(cap_rate, 2),
+                            'bedrooms': details.get('bedrooms', 0),
+                            'bathrooms': details.get('bathrooms', 0),
+                            'sqft': living_area,
+                            'pricePerSqft': round(zestimate / living_area, 2) if living_area > 0 else 0,
+                            'yearBuilt': details.get('yearBuilt', 'N/A')
+                        }
+                        
+                        processed_properties.append(processed_prop)
+                    
+                    return jsonify(processed_properties), 200
                 
         return jsonify({"error": "Property coordinates not found"}), 404
         
     except Exception as e:
         logger.error(f"Error in nearby properties: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
+    
 @app.route('/api/save-portfolio', methods=['POST'])
 def save_portfolio():
     portfolio_data = request.json
