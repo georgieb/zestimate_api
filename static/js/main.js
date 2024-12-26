@@ -131,7 +131,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const modal = document.createElement('div');
         modal.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center p-4 z-50';
         modal.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">   
                 <div class="p-6">
                     <div class="flex justify-between items-start mb-4">
                         <h2 class="text-xl font-bold">${property.address || 'N/A'}</h2>
@@ -200,7 +200,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         </div>
                     </div>
 
-                    <button onclick="getNearbyProperties('${property.zpid}')"
+                    <button onclick="window.open('/nearby/${property.zpid}', '_blank')"
                             class="mt-4 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
                         Show Nearby Properties
                     </button>

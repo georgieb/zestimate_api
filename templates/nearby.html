@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid grid-cols-1 gap-6">
+    <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-xl font-bold">Nearby Properties</h2>
+            <a href="/" class="text-blue-600 hover:text-blue-800">Back to Portfolio</a>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Zestimate</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Rental Est.</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Cap Rate</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Beds/Baths</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Sqft</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">$/Sqft</th>
+                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Year Built</th>
+                    </tr>
+                </thead>
+                <tbody id="nearbyPropertiesList" class="bg-white divide-y divide-gray-200">
+                    <tr>
+                        <td colspan="8" class="px-6 py-4 text-center text-gray-500">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    
+    <!-- Map View -->
+    <div class="bg-white rounded-lg shadow p-6">
+        <h2 class="text-xl font-bold mb-4">Property Locations</h2>
+        <div id="map" class="h-96 rounded-lg"></div>
+    </div>
+</div>
+
+<!-- Make sure to include Mapbox CSS in your base template or here -->
+<link href='https://api.mapbox.com/mapbox-gl-js/v2.14.1/mapbox-gl.css' rel='stylesheet' />
+
+<script>
+const zpid = "{{ zpid }}";  // Get zpid from Flask template
+
+function formatNumber(num) {
+    return num ? num.toLocaleString(undefined, {maximumFractionDigits: 2}) : '0';
+}
+
+function formatCurrency(num) {
+    return num ? `$${formatNumber(num)}` : '$0';
+}
+
+// Function to calculate cap rate
+function calculateCapRate(zestimate, rentalZestimate) {
+    if (!zestimate || !rentalZestimate) return 0;
+    return (rentalZestimate * 12 * 0.60 / zestimate * 100);
+}
+
+// Function to update property list
+function updatePropertyList(properties) {
+    const tbody = document.getElementById('nearbyPropertiesList');
+    tbody.innerHTML = properties.map(property => {
+        // Calculate cap rate
+        // Calculate metrics
+const capRate = calculateCapRate(property.zestimate, property.rentalZestimate);
+const pricePerSqft = property.livingArea && property.livingArea > 0 ? 
+    (property.zestimate || 0) / property.livingArea : 
+    0;
+        
+        return `
+            <tr class="hover:bg-gray-50">
+                <td class="px-6 py-4">
+                    <div class="flex flex-col">
+                        <span class="font-medium">${property.address || 'N/A'}</span>
+                    </div>
+                </td>
+                <td class="px-6 py-4 text-right">${formatCurrency(property.zestimate)}</td>
+                <td class="px-6 py-4 text-right">${formatCurrency(property.rentalZestimate)}</td>
+                <td class="px-6 py-4 text-right">${capRate.toFixed(2)}%</td>
+                <td class="px-6 py-4 text-right">${property.bedrooms || 0}/${property.bathrooms || 0}</td>
+                <td class="px-6 py-4 text-right">${formatNumber(property.livingArea || 0)} sqft</td>
+                <td class="px-6 py-4 text-right">${formatCurrency((property.zestimate || 0) / (property.livingArea || 1))}/sqft</td>
+                <td class="px-6 py-4 text-right">${property.yearBuilt || 'N/A'}</td>
+            </tr>
+        `;
+    }).join('');
+}
+
+// Function to update map
+function updateMap(properties, map) {
+    // Clear existing markers
+    const markers = document.getElementsByClassName('mapboxgl-marker');
+    while(markers[0]) {
+        markers[0].parentNode.removeChild(markers[0]);
+    }
+
+    // Add new markers
+    const bounds = new mapboxgl.LngLatBounds();
+    
+    properties.forEach(property => {
+        // Check both uppercase and lowercase latitude/longitude keys
+        const lat = property.latitude || property.Latitude;
+        const lng = property.longitude || property.Longitude;
+        
+        if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+            const marker = new mapboxgl.Marker()
+                .setLngLat([lng, lat])
+                .setPopup(
+                    new mapboxgl.Popup({ offset: 25 })
+                        .setHTML(`
+                            <div class="p-2">
+                                <h3 class="font-bold text-sm mb-1">${property.address}</h3>
+                                <p class="text-sm">Zestimate: ${formatCurrency(property.zestimate)}</p>
+                                <p class="text-sm">Cap Rate: ${calculateCapRate(property.zestimate, property.rentalZestimate).toFixed(2)}%</p>
+                                <p class="text-sm">${property.bedrooms || 0} beds, ${property.bathrooms || 0} baths</p>
+                                <p class="text-sm">${formatNumber(property.livingArea || 0)} sqft</p>
+                            </div>
+                        `)
+                )
+                .addTo(map);
+
+            bounds.extend([lng, lat]);
+        }
+    });
+
+    // Only fit bounds if we have coordinates
+    if (!bounds.isEmpty()) {
+        map.fitBounds(bounds, {
+            padding: { top: 50, bottom: 50, left: 50, right: 50 },
+            maxZoom: 15
+        });
+    }
+}
+
+// Function to load properties
+async function loadProperties(map) {
+    try {
+        const response = await fetch(`/api/nearby-properties/${zpid}`);
+        if (!response.ok) throw new Error('Failed to fetch nearby properties');
+        
+        const properties = await response.json();
+        console.log('Loaded properties:', properties); // Debug log
+        
+        if (Array.isArray(properties)) {
+            if (properties.length === 0) {
+                document.getElementById('nearbyPropertiesList').innerHTML = `
+                    <tr>
+                        <td colspan="8" class="px-6 py-4 text-center text-gray-500">
+                            No nearby properties found
+                        </td>
+                    </tr>
+                `;
+            } else {
+                updatePropertyList(properties);
+                updateMap(properties, map);
+            }
+        } else {
+            throw new Error('Invalid response format');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        document.getElementById('nearbyPropertiesList').innerHTML = `
+            <tr>
+                <td colspan="8" class="px-6 py-4 text-center text-red-500">
+                    Error loading properties: ${error.message}
+                </td>
+            </tr>
+        `;
+    }
+}
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize map
+    mapboxgl.accessToken = 'pk.eyJ1IjoiZ2JvcnJlcm8iLCJhIjoiY20zYzh1aXl4MXlpazJxcHNyeXBycnpxaCJ9.Scyic85rzjP_OLOeM4_F5w';
+    const map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mapbox/streets-v11',
+        center: [-77.8744, 34.2169], // Center on Wilmington area
+        zoom: 10
+    });
+
+    // Load properties once map is ready
+    map.on('load', () => loadProperties(map));
+});
+</script>
+{% endblock %}
