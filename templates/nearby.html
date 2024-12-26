@@ -56,22 +56,26 @@ function calculateCapRate(zestimate, rentalZestimate) {
     return (rentalZestimate * 12 * 0.60 / zestimate * 100);
 }
 
+// Function to calculate price per square foot
+function calculatePricePerSqft(zestimate, livingArea) {
+    if (!zestimate || !livingArea || livingArea === 0) return 0;
+    return zestimate / livingArea;
+}
+
 // Function to update property list
 function updatePropertyList(properties) {
     const tbody = document.getElementById('nearbyPropertiesList');
     tbody.innerHTML = properties.map(property => {
-        // Calculate cap rate
         // Calculate metrics
-const capRate = calculateCapRate(property.zestimate, property.rentalZestimate);
-const pricePerSqft = property.livingArea && property.livingArea > 0 ? 
-    (property.zestimate || 0) / property.livingArea : 
-    0;
+        const capRate = calculateCapRate(property.zestimate, property.rentalZestimate);
+        const pricePerSqft = calculatePricePerSqft(property.zestimate, property.livingArea);
         
         return `
             <tr class="hover:bg-gray-50">
                 <td class="px-6 py-4">
                     <div class="flex flex-col">
                         <span class="font-medium">${property.address || 'N/A'}</span>
+                        <span class="text-sm text-gray-500">${property.propertyType || ''}</span>
                     </div>
                 </td>
                 <td class="px-6 py-4 text-right">${formatCurrency(property.zestimate)}</td>
@@ -79,7 +83,7 @@ const pricePerSqft = property.livingArea && property.livingArea > 0 ?
                 <td class="px-6 py-4 text-right">${capRate.toFixed(2)}%</td>
                 <td class="px-6 py-4 text-right">${property.bedrooms || 0}/${property.bathrooms || 0}</td>
                 <td class="px-6 py-4 text-right">${formatNumber(property.livingArea || 0)} sqft</td>
-                <td class="px-6 py-4 text-right">${formatCurrency((property.zestimate || 0) / (property.livingArea || 1))}/sqft</td>
+                <td class="px-6 py-4 text-right">${formatCurrency(pricePerSqft)}/sqft</td>
                 <td class="px-6 py-4 text-right">${property.yearBuilt || 'N/A'}</td>
             </tr>
         `;
@@ -98,7 +102,6 @@ function updateMap(properties, map) {
     const bounds = new mapboxgl.LngLatBounds();
     
     properties.forEach(property => {
-        // Check both uppercase and lowercase latitude/longitude keys
         const lat = property.latitude || property.Latitude;
         const lng = property.longitude || property.Longitude;
         
@@ -114,6 +117,7 @@ function updateMap(properties, map) {
                                 <p class="text-sm">Cap Rate: ${calculateCapRate(property.zestimate, property.rentalZestimate).toFixed(2)}%</p>
                                 <p class="text-sm">${property.bedrooms || 0} beds, ${property.bathrooms || 0} baths</p>
                                 <p class="text-sm">${formatNumber(property.livingArea || 0)} sqft</p>
+                                <p class="text-sm">${formatCurrency(calculatePricePerSqft(property.zestimate, property.livingArea))}/sqft</p>
                             </div>
                         `)
                 )
