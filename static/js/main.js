@@ -131,7 +131,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const modal = document.createElement('div');
         modal.className = 'fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center p-4 z-50';
         modal.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">   
                 <div class="p-6">
                     <div class="flex justify-between items-start mb-4">
                         <h2 class="text-xl font-bold">${property.address || 'N/A'}</h2>
@@ -200,7 +200,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         </div>
                     </div>
 
-                    <button onclick="getNearbyProperties('${property.zpid}')"
+                    <button onclick="window.open('/nearby/${property.zpid}', '_blank')"
                             class="mt-4 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
                         Show Nearby Properties
                     </button>
@@ -210,22 +210,70 @@ document.addEventListener('DOMContentLoaded', function() {
         document.body.appendChild(modal);
     };
 
-    // Function to get nearby properties
+    // Update the getNearbyProperties function
     const getNearbyProperties = async (zpid) => {
         try {
             setLoading(true);
+            
+            // Close the modal/popup first
+            const modal = document.querySelector('.fixed');
+            if (modal) {
+                modal.remove();
+            }
+
             const response = await fetch(`/api/nearby-properties/${zpid}`);
             if (!response.ok) throw new Error('Failed to fetch nearby properties');
             
             const properties = await response.json();
+            
+            // Update the properties list
+            const propertyList = document.getElementById('propertyList');
+            propertyList.innerHTML = ''; // Clear existing list
+            
+            // Add a header or indicator for nearby properties
+            const headerRow = document.createElement('tr');
+            headerRow.innerHTML = `
+                <td colspan="8" class="px-6 py-3 bg-gray-100">
+                    <div class="flex items-center space-x-2">
+                        <span class="font-medium">Nearby Properties</span>
+                        <button onclick="restorePortfolio()" 
+                                class="text-sm text-blue-600 hover:text-blue-800">
+                            Return to Portfolio
+                        </button>
+                    </div>
+                </td>
+            `;
+            propertyList.appendChild(headerRow);
+
+            // Update property list with nearby properties
             updatePropertyList(properties);
             updateMap(properties);
+
+            // Scroll to the property list
+            const propertySection = document.querySelector('.bg-white.rounded-lg.shadow.p-6');
+            if (propertySection) {
+                propertySection.scrollIntoView({ behavior: 'smooth' });
+            }
+
         } catch (error) {
             alert('Error fetching nearby properties: ' + error.message);
         } finally {
             setLoading(false);
         }
     };
+
+    // Add function to restore original portfolio
+    const restorePortfolio = () => {
+        if (currentPortfolio && currentPortfolio.data) {
+            updatePropertyList(currentPortfolio.data.properties);
+            updateMap(currentPortfolio.data.properties);
+            updateSummary(currentPortfolio.data.summary);
+        }
+    };
+
+    // Make both functions globally available
+    window.getNearbyProperties = getNearbyProperties;
+    window.restorePortfolio = restorePortfolio;
 
     // Function to load portfolio from URL
     const loadPortfolio = async () => {
