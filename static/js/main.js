@@ -290,7 +290,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 if (portfolio) {
                     document.getElementById('portfolioName').value = portfolio.name;
-                    document.getElementById('zpidInput').value = portfolio.zpids.join(',');
+                    // Use the saved input if available, otherwise fall back to zpids
+                    const inputValue = portfolio.input || portfolio.zpids.join(',');
+                    document.getElementById('propertyInput').value = inputValue;
                     currentPortfolio = portfolio;
                     await analyzePortfolio();
                 }
@@ -300,43 +302,140 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     };
 
+    // Function to validate input
+    const validateInput = async () => {
+        const propertyInput = document.getElementById('propertyInput').value;
+        const validationResults = document.getElementById('validationResults');
+        
+        if (!propertyInput.trim()) {
+            validationResults.innerHTML = '<span class="text-red-600">Please enter some properties to validate.</span>';
+            return;
+        }
+        
+        try {
+            validationResults.innerHTML = '<span class="text-blue-600">Validating...</span>';
+            
+            const response = await fetch('/api/parse-input', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ input: propertyInput })
+            });
+            
+            if (!response.ok) throw new Error('Failed to validate input');
+            
+            const result = await response.json();
+            
+            let html = `<div class="space-y-2">`;
+            
+            if (result.zpids.length > 0) {
+                html += `<div class="text-green-600">✓ Found ${result.zpids.length} valid ZPIDs</div>`;
+            }
+            
+            if (result.address_results.length > 0) {
+                const validAddresses = result.address_results.filter(r => r.found);
+                const invalidAddresses = result.address_results.filter(r => !r.found);
+                
+                if (validAddresses.length > 0) {
+                    html += `<div class="text-green-600">✓ Found ${validAddresses.length} valid addresses (${validAddresses.reduce((sum, r) => sum + r.zpids.length, 0)} properties)</div>`;
+                }
+                
+                if (invalidAddresses.length > 0) {
+                    html += `<div class="text-red-600">✗ ${invalidAddresses.length} addresses not found:</div>`;
+                    invalidAddresses.forEach(addr => {
+                        html += `<div class="text-red-500 text-xs ml-4">• ${addr.address}</div>`;
+                    });
+                }
+            }
+            
+            if (result.invalid_entries.length > 0) {
+                html += `<div class="text-yellow-600">⚠ ${result.invalid_entries.length} invalid entries: ${result.invalid_entries.join(', ')}</div>`;
+            }
+            
+            html += `<div class="text-blue-600 font-medium">Total properties that will be analyzed: ${result.total_properties_found}</div>`;
+            html += `</div>`;
+            
+            validationResults.innerHTML = html;
+            
+        } catch (error) {
+            validationResults.innerHTML = `<span class="text-red-600">Error validating input: ${error.message}</span>`;
+        }
+    };
+
     // Function to analyze portfolio
-    // Update the analyzePortfolio function in main.js
-const analyzePortfolio = async () => {
-    const zpidInput = document.getElementById('zpidInput').value;
-    const zpids = zpidInput.split(',').map(zpid => zpid.trim());
+    const analyzePortfolio = async () => {
+        const propertyInput = document.getElementById('propertyInput').value;
+        
+        if (!propertyInput.trim()) {
+            alert('Please enter some properties (ZPIDs or addresses) to analyze.');
+            return;
+        }
 
-    try {
-        setLoading(true);
-        const response = await fetch('/api/properties', { // Note the URL change
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ zpids })
-        });
+        try {
+            setLoading(true);
+            
+            // First parse the input to separate ZPIDs and addresses
+            const parseResponse = await fetch('/api/parse-input', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ input: propertyInput })
+            });
+            
+            if (!parseResponse.ok) throw new Error('Failed to parse input');
+            
+            const parseResult = await parseResponse.json();
+            
+            // Collect all ZPIDs from direct ZPIDs and address searches
+            const allZpids = [...parseResult.zpids];
+            parseResult.address_results.forEach(result => {
+                if (result.found) {
+                    allZpids.push(...result.zpids);
+                }
+            });
+            
+            if (allZpids.length === 0) {
+                throw new Error('No valid properties found. Please check your addresses and ZPIDs.');
+            }
+            
+            // Now get property data using the ZPIDs
+            const response = await fetch('/api/properties', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ zpids: allZpids })
+            });
 
-        if (!response.ok) throw new Error('Failed to fetch property data');
+            if (!response.ok) throw new Error('Failed to fetch property data');
 
-        const data = await response.json();
-        currentPortfolio = {
-            name: document.getElementById('portfolioName').value,
-            zpids,
-            data
-        };
+            const data = await response.json();
+            currentPortfolio = {
+                name: document.getElementById('portfolioName').value,
+                input: propertyInput,
+                zpids: allZpids,
+                data
+            };
 
-        updateSummary(data.summary);
-        updatePropertyList(data.properties);
-        updateMap(data.properties);
-    } catch (error) {
-        alert('Error analyzing portfolio: ' + error.message);
-    } finally {
-        setLoading(false);
-    }
-};
+            updateSummary(data.summary);
+            updatePropertyList(data.properties);
+            updateMap(data.properties);
+            
+            // Clear validation results after successful analysis
+            document.getElementById('validationResults').innerHTML = '';
+            
+        } catch (error) {
+            alert('Error analyzing portfolio: ' + error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     // Event Listeners
     document.getElementById('analyzeBtn')?.addEventListener('click', analyzePortfolio);
+    document.getElementById('validateBtn')?.addEventListener('click', validateInput);
 
     document.getElementById('savePortfolioBtn')?.addEventListener('click', async () => {
         if (!currentPortfolio) {

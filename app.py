@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 import logging
 import time
+import re
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry  # Fixed import
 
@@ -41,6 +42,135 @@ def safe_float(value, default=0.0):
         return float(value)
     except (ValueError, TypeError):
         return default
+
+def normalize_address(address):
+    """Normalize an address string for consistent searching"""
+    if not address:
+        return ""
+    
+    # Remove extra whitespace and convert to title case
+    address = re.sub(r'\s+', ' ', address.strip()).title()
+    
+    # Common abbreviation standardizations
+    abbreviations = {
+        'Street': 'St', 'St.': 'St',
+        'Avenue': 'Ave', 'Ave.': 'Ave', 
+        'Road': 'Rd', 'Rd.': 'Rd',
+        'Drive': 'Dr', 'Dr.': 'Dr',
+        'Court': 'Ct', 'Ct.': 'Ct',
+        'Lane': 'Ln', 'Ln.': 'Ln',
+        'Place': 'Pl', 'Pl.': 'Pl',
+        'Boulevard': 'Blvd', 'Blvd.': 'Blvd',
+        'Circle': 'Cir', 'Cir.': 'Cir',
+        'Terrace': 'Ter', 'Ter.': 'Ter',
+        'Way': 'Way',
+        'North': 'N', 'South': 'S', 'East': 'E', 'West': 'W',
+        'Northeast': 'NE', 'Northwest': 'NW', 'Southeast': 'SE', 'Southwest': 'SW'
+    }
+    
+    for full, abbrev in abbreviations.items():
+        address = re.sub(rf'\b{full}\b', abbrev, address, flags=re.IGNORECASE)
+    
+    return address
+
+def parse_address_components(address):
+    """Parse address into searchable components"""
+    if not address:
+        return {}
+    
+    # Normalize the address first
+    normalized = normalize_address(address)
+    
+    # Split address by commas to separate components
+    parts = [part.strip() for part in normalized.split(',')]
+    
+    components = {}
+    
+    if len(parts) >= 1:
+        # First part is typically street address
+        street_part = parts[0]
+        
+        # Extract house number (digits at the beginning)
+        house_match = re.match(r'^(\d+)\s+(.+)', street_part)
+        if house_match:
+            components['house_number'] = house_match.group(1)
+            components['street'] = house_match.group(2)
+        else:
+            components['street'] = street_part
+    
+    if len(parts) >= 2:
+        # Second part is typically city
+        components['city'] = parts[1]
+    
+    if len(parts) >= 3:
+        # Third part is typically state and zip
+        state_zip = parts[2].strip().upper()
+        state_zip_match = re.match(r'^([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$', state_zip)
+        if state_zip_match:
+            components['state'] = state_zip_match.group(1)
+            components['zip'] = state_zip_match.group(2)
+        else:
+            # Try to extract just state if no zip
+            state_match = re.match(r'^([A-Z]{2})$', state_zip)
+            if state_match:
+                components['state'] = state_match.group(1)
+    
+    return components
+
+def is_zpid(input_str):
+    """Check if input string is a ZPID (numeric)"""
+    if not input_str:
+        return False
+    return input_str.strip().isdigit()
+
+def search_properties_by_address(address):
+    """Search for properties by address using the parcels API"""
+    if not address:
+        return []
+    
+    components = parse_address_components(address)
+    logger.debug(f"Parsed address components: {components}")
+    
+    # Build search parameters
+    params = {"access_token": API_KEY}
+    
+    # Add address components to search
+    if 'house_number' in components:
+        params['address.house'] = components['house_number']
+    if 'street' in components:
+        params['address.street'] = components['street']
+    if 'city' in components:
+        params['address.city'] = components['city']
+    if 'state' in components:
+        params['address.state'] = components['state']
+    if 'zip' in components:
+        params['address.zip'] = components['zip']
+    
+    url = "https://api.bridgedataoutput.com/api/v2/pub/parcels"
+    
+    try:
+        logger.debug(f"Searching parcels with params: {params}")
+        response = http.get(url, params=params)
+        response.raise_for_status()
+        
+        data = response.json()
+        logger.debug(f"Parcels search response: {data}")
+        
+        if data.get('success') and data.get('bundle'):
+            zpids = []
+            for parcel in data['bundle']:
+                zpid = parcel.get('zpid')
+                if zpid:
+                    zpids.append(str(zpid))
+            
+            logger.debug(f"Found ZPIDs from address search: {zpids}")
+            return zpids
+        
+        return []
+        
+    except Exception as e:
+        logger.error(f"Error searching by address: {str(e)}")
+        return []
 
 def get_living_area_from_parcel(areas):
     """Extract living area from parcel data areas, checking multiple area types"""
@@ -143,11 +273,31 @@ def portfolio():
 
 @app.route('/api/properties', methods=['POST'])
 def get_properties():
-    zpid_list = request.json.get('zpids', [])
-    logger.debug(f"Received request for {len(zpid_list)} ZPIDs")
+    data = request.json
+    zpid_list = data.get('zpids', [])
+    address_list = data.get('addresses', [])
     
-    if not zpid_list:
-        return jsonify({"error": "No ZPIDs provided"}), 400
+    logger.debug(f"Received request for {len(zpid_list)} ZPIDs and {len(address_list)} addresses")
+    
+    # Convert addresses to ZPIDs
+    all_zpids = list(zpid_list)  # Start with existing ZPIDs
+    
+    if address_list:
+        for address in address_list:
+            if address.strip():
+                found_zpids = search_properties_by_address(address.strip())
+                if found_zpids:
+                    all_zpids.extend(found_zpids)
+                    logger.debug(f"Address '{address}' converted to ZPIDs: {found_zpids}")
+                else:
+                    logger.warning(f"No properties found for address: {address}")
+    
+    if not all_zpids:
+        return jsonify({"error": "No properties found for the provided addresses/ZPIDs"}), 400
+    
+    # Remove duplicates while preserving order
+    zpid_list = list(dict.fromkeys(all_zpids))
+    logger.debug(f"Final ZPID list after address conversion: {zpid_list}")
 
     api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
     all_results = []
@@ -459,6 +609,96 @@ def delete_portfolio():
         return jsonify({"error": "No portfolios found"}), 404
     except Exception as e:
         logger.error(f"Error deleting portfolio: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/validate-address', methods=['POST'])
+def validate_address():
+    """Validate an address and return parsed components and potential matches"""
+    data = request.json
+    address = data.get('address', '')
+    
+    if not address:
+        return jsonify({"error": "Address is required"}), 400
+    
+    try:
+        # Parse address components
+        components = parse_address_components(address)
+        normalized = normalize_address(address)
+        
+        # Search for properties with this address
+        zpids = search_properties_by_address(address)
+        
+        result = {
+            "original": address,
+            "normalized": normalized,
+            "components": components,
+            "zpids_found": zpids,
+            "is_valid": len(zpids) > 0,
+            "property_count": len(zpids)
+        }
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error validating address: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/parse-input', methods=['POST'])
+def parse_input():
+    """Parse mixed input of addresses and ZPIDs"""
+    data = request.json
+    input_text = data.get('input', '')
+    
+    if not input_text:
+        return jsonify({"error": "Input is required"}), 400
+    
+    try:
+        lines = [line.strip() for line in input_text.split('\n') if line.strip()]
+        
+        zpids = []
+        addresses = []
+        invalid_entries = []
+        
+        for line in lines:
+            # Check if the entire line is a ZPID first
+            if is_zpid(line):
+                zpids.append(line)
+            elif len(line) > 10 and ',' in line:  # Likely a full address with commas
+                addresses.append(line)
+            else:
+                # Split by comma and process each item
+                items = [item.strip() for item in line.split(',') if item.strip()]
+                
+                for item in items:
+                    if is_zpid(item):
+                        zpids.append(item)
+                    elif len(item) > 3:  # Assume anything longer than 3 chars might be an address
+                        addresses.append(item)
+                    else:
+                        invalid_entries.append(item)
+        
+        # Validate addresses and get ZPIDs
+        address_results = []
+        for address in addresses:
+            found_zpids = search_properties_by_address(address)
+            address_results.append({
+                "address": address,
+                "zpids": found_zpids,
+                "found": len(found_zpids) > 0
+            })
+        
+        result = {
+            "zpids": zpids,
+            "addresses": addresses,
+            "address_results": address_results,
+            "invalid_entries": invalid_entries,
+            "total_properties_found": len(zpids) + sum(len(r["zpids"]) for r in address_results)
+        }
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        logger.error(f"Error parsing input: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
