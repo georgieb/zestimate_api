@@ -124,53 +124,27 @@ def is_zpid(input_str):
     return input_str.strip().isdigit()
 
 def search_properties_by_address(address):
-    """Search for properties by address using the parcels API"""
+    """Search for properties by address - try multiple approaches"""
     if not address:
         return []
     
     components = parse_address_components(address)
     logger.debug(f"Parsed address components: {components}")
     
-    # Build search parameters
-    params = {"access_token": API_KEY}
+    # For now, return empty array with helpful logging
+    # The Bridge Data Output API parcels endpoint doesn't seem to support address-based searches
+    # with the current API key configuration
     
-    # Add address components to search
-    if 'house_number' in components:
-        params['address.house'] = components['house_number']
-    if 'street' in components:
-        params['address.street'] = components['street']
-    if 'city' in components:
-        params['address.city'] = components['city']
-    if 'state' in components:
-        params['address.state'] = components['state']
-    if 'zip' in components:
-        params['address.zip'] = components['zip']
-    
-    url = "https://api.bridgedataoutput.com/api/v2/pub/parcels"
-    
-    try:
-        logger.debug(f"Searching parcels with params: {params}")
-        response = http.get(url, params=params)
-        response.raise_for_status()
-        
-        data = response.json()
-        logger.debug(f"Parcels search response: {data}")
-        
-        if data.get('success') and data.get('bundle'):
-            zpids = []
-            for parcel in data['bundle']:
-                zpid = parcel.get('zpid')
-                if zpid:
-                    zpids.append(str(zpid))
-            
-            logger.debug(f"Found ZPIDs from address search: {zpids}")
-            return zpids
-        
-        return []
-        
-    except Exception as e:
-        logger.error(f"Error searching by address: {str(e)}")
-        return []
+    logger.info(f"Address search not yet supported via API. Address parsed successfully: {components}")
+    return []
+
+def search_properties_by_address_future(address):
+    """Future implementation - could use geocoding + geographic search"""
+    # This would require:
+    # 1. Geocode the address to get lat/lng coordinates
+    # 2. Use the zestimates API with 'near' parameter
+    # 3. Filter results by exact address match
+    pass
 
 def get_living_area_from_parcel(areas):
     """Extract living area from parcel data areas, checking multiple area types"""
@@ -681,11 +655,23 @@ def parse_input():
         address_results = []
         for address in addresses:
             found_zpids = search_properties_by_address(address)
-            address_results.append({
+            result = {
                 "address": address,
                 "zpids": found_zpids,
                 "found": len(found_zpids) > 0
-            })
+            }
+            
+            # Add helpful messages for debugging
+            if not result["found"]:
+                components = parse_address_components(address)
+                if not components.get('zip'):
+                    result["message"] = "Address missing ZIP code - try adding it"
+                elif not components.get('house_number'):
+                    result["message"] = "Address missing house number"
+                else:
+                    result["message"] = "Address not found in property database"
+            
+            address_results.append(result)
         
         result = {
             "zpids": zpids,

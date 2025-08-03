@@ -342,10 +342,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 
                 if (invalidAddresses.length > 0) {
-                    html += `<div class="text-red-600">✗ ${invalidAddresses.length} addresses not found:</div>`;
+                    html += `<div class="text-yellow-600">⚠ ${invalidAddresses.length} addresses not found in database:</div>`;
                     invalidAddresses.forEach(addr => {
-                        html += `<div class="text-red-500 text-xs ml-4">• ${addr.address}</div>`;
+                        const message = addr.message || "Address not found in property database";
+                        html += `<div class="text-yellow-500 text-xs ml-4">• ${addr.address} - ${message}</div>`;
                     });
+                    html += `<div class="text-blue-500 text-xs mt-2">💡 Tip: For best results, use ZPIDs instead of addresses</div>`;
                 }
             }
             
