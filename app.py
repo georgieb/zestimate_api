@@ -265,58 +265,88 @@ def search_properties_by_address(address):
     return search_properties_by_address_fallback(address)
 
 def are_property_types_compatible(source_type, target_type):
-    """Check if two property types are compatible for comparison"""
+    """Check if two property types are compatible for comparison - strict matching"""
     if not source_type or not target_type:
-        return True  # If we don't know the type, allow it
+        return False  # If we don't know the type, don't allow it for better filtering
     
     source_type = source_type.lower().strip()
     target_type = target_type.lower().strip()
     
-    # Define property type groups for matching
+    # Define strict property type groups for matching
     single_family_types = [
-        'single family residential', 'single family dwelling', 'single-family',
-        'residential', 'detached single family', 'single family detached'
+        'single family residential', 
+        'single family dwelling', 
+        'single-family residential',
+        'residential single family',
+        'detached single family', 
+        'single family detached'
     ]
     
     condo_types = [
-        'condominium', 'condo', 'residential condo', 'condominium unit',
-        'townhouse', 'townhome', 'row house'
+        'condominium', 
+        'condo', 
+        'residential condo', 
+        'condominium unit',
+        'townhouse', 
+        'townhome', 
+        'row house',
+        'townhouse residential'
     ]
     
     multi_family_types = [
-        'duplex', 'triplex', 'quadruplex', 'multi-family', 'multifamily',
-        'apartment', 'apartment building', '2-4 family'
+        'duplex', 
+        'triplex', 
+        'quadruplex', 
+        'multi-family', 
+        'multifamily',
+        'apartment', 
+        'apartment building', 
+        '2-4 family',
+        'multi family residential'
     ]
     
     mobile_home_types = [
-        'mobile home', 'manufactured home', 'mobile home park',
-        'manufactured housing', 'trailer'
+        'mobile home', 
+        'manufactured home', 
+        'mobile home park',
+        'manufactured housing', 
+        'trailer',
+        'mobile home residential'
     ]
     
-    # Check if both types are in the same category
-    type_groups = [single_family_types, condo_types, multi_family_types, mobile_home_types]
+    # Check if both types are in the same specific category
+    type_groups = [
+        ('single_family', single_family_types),
+        ('condo', condo_types), 
+        ('multi_family', multi_family_types),
+        ('mobile_home', mobile_home_types)
+    ]
     
-    for group in type_groups:
-        source_in_group = any(group_type in source_type for group_type in group)
-        target_in_group = any(group_type in target_type for group_type in group)
-        
-        if source_in_group and target_in_group:
-            return True
+    source_category = None
+    target_category = None
     
-    # More flexible matching for broader residential categories
-    # If source is single family, also allow generic residential
-    if any(sf_type in source_type for sf_type in single_family_types):
-        if 'residential' in target_type:
-            return True
+    # Determine source category
+    for category_name, group in type_groups:
+        if any(group_type in source_type for group_type in group):
+            source_category = category_name
+            break
     
-    # If target is single family, also allow generic residential source
-    if any(sf_type in target_type for sf_type in single_family_types):
-        if 'residential' in source_type:
-            return True
+    # Determine target category  
+    for category_name, group in type_groups:
+        if any(group_type in target_type for group_type in group):
+            target_category = category_name
+            break
     
-    # Allow any residential to match with any residential if no specific category match
-    if 'residential' in source_type and 'residential' in target_type:
+    # Only match if both are in the same specific category
+    if source_category and target_category and source_category == target_category:
         return True
+    
+    # Special case: if source is "Single Family Residential" and target is generic "Residential"
+    # but only if target is NOT mobile home, condo, or multi-family
+    if source_category == 'single_family' and 'residential' in target_type:
+        # Make sure target is not in other specific categories
+        if not any(category in target_category for category in ['mobile_home', 'condo', 'multi_family'] if target_category):
+            return True
     
     return False
 
@@ -857,6 +887,7 @@ def nearby_properties(zpid):
             
             # Check if property type matches source property type
             is_compatible = are_property_types_compatible(source_property_type, property_type)
+            logger.debug(f"Property type compatibility check: Source='{source_property_type}' vs Target='{property_type}' -> Compatible={is_compatible}")
             
             # Calculate cap rate
             if property_info['zestimate'] > 0:
@@ -884,7 +915,9 @@ def nearby_properties(zpid):
         
         nearby_properties = final_properties
         
-        logger.debug(f"Filtered to {len(nearby_properties)} properties ({len(compatible_properties)} compatible + {len(nearby_properties) - len(compatible_properties)} other residential) from {len(data['bundle'])} total nearby properties")
+        compatible_count = len(compatible_properties)
+        other_count = len(nearby_properties) - compatible_count
+        logger.info(f"Source property type: '{source_property_type}' -> Found {len(nearby_properties)} properties ({compatible_count} compatible + {other_count} other residential) from {len(data['bundle'])} total nearby properties")
         
         # If no residential properties found, return a limited set of all properties as fallback
         if not nearby_properties and data['bundle']:
