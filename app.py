@@ -264,6 +264,51 @@ def search_properties_by_address(address):
     logger.info("Direct address search failed, trying fallback city/zip search")
     return search_properties_by_address_fallback(address)
 
+def are_property_types_compatible(source_type, target_type):
+    """Check if two property types are compatible for comparison"""
+    if not source_type or not target_type:
+        return True  # If we don't know the type, allow it
+    
+    source_type = source_type.lower().strip()
+    target_type = target_type.lower().strip()
+    
+    # Define property type groups for matching
+    single_family_types = [
+        'single family residential', 'single family dwelling', 'single-family',
+        'residential', 'detached single family', 'single family detached'
+    ]
+    
+    condo_types = [
+        'condominium', 'condo', 'residential condo', 'condominium unit',
+        'townhouse', 'townhome', 'row house'
+    ]
+    
+    multi_family_types = [
+        'duplex', 'triplex', 'quadruplex', 'multi-family', 'multifamily',
+        'apartment', 'apartment building', '2-4 family'
+    ]
+    
+    mobile_home_types = [
+        'mobile home', 'manufactured home', 'mobile home park',
+        'manufactured housing', 'trailer'
+    ]
+    
+    # Check if both types are in the same category
+    type_groups = [single_family_types, condo_types, multi_family_types, mobile_home_types]
+    
+    for group in type_groups:
+        source_in_group = any(group_type in source_type for group_type in group)
+        target_in_group = any(group_type in target_type for group_type in group)
+        
+        if source_in_group and target_in_group:
+            return True
+    
+    # Special case: if source is generic "residential", match with single family
+    if 'residential' in source_type and any(sf_type in target_type for sf_type in single_family_types):
+        return True
+    
+    return False
+
 def search_properties_by_address_fallback(address):
     """Fallback search using city/zip when address.full doesn't work"""
     components = parse_address_components(address)
@@ -594,12 +639,32 @@ def nearby_properties(zpid):
             logger.error(f"Property coordinates not found for ZPID: {zpid}")
             return jsonify({"error": "Property coordinates not found"}), 404
             
-        # Get nearby properties
+        # Get the source property type for matching
+        source_property_type = None
+        if 'landUseDescription' in property_data:
+            source_property_type = property_data.get('landUseDescription')
+        else:
+            # Get source property parcel data to determine type
+            source_parcel_response = http.get(
+                "https://api.bridgedataoutput.com/api/v2/pub/parcels",
+                params={
+                    "access_token": API_KEY,
+                    "zpid": zpid
+                }
+            )
+            if source_parcel_response.status_code == 200:
+                source_parcel_data = source_parcel_response.json()
+                if source_parcel_data.get('bundle'):
+                    source_property_type = source_parcel_data['bundle'][0].get('landUseDescription')
+        
+        logger.debug(f"Source property type: {source_property_type}")
+        
+        # Get nearby properties - increase limit to get more candidates before filtering
         logger.debug(f"Getting nearby properties for coordinates: {longitude},{latitude}")
         response = http.get(api_url, params={
             "access_token": API_KEY,
             "near": f"{longitude},{latitude}",
-            "limit": 20
+            "limit": 50  # Get more candidates to filter down to 20 matches
         })
         
         if response.status_code != 200:
@@ -677,8 +742,9 @@ def nearby_properties(zpid):
             
             time.sleep(1)  # Rate limiting between batches
         
-        # Process and combine the data - filter for residential properties only
+        # Process and combine the data - filter for matching property types
         nearby_properties = []
+        compatible_properties = []
         residential_property_types = [
             'Single Family Residential',
             'Single Family Dwelling',
@@ -697,9 +763,15 @@ def nearby_properties(zpid):
         ]
         
         for prop in data['bundle']:
-            zpid = str(prop.get('zpid'))
+            prop_zpid = str(prop.get('zpid'))
+            
+            # Skip the source property itself
+            if prop_zpid == str(zpid):
+                logger.debug(f"Skipping source property ZPID: {prop_zpid}")
+                continue
+                
             property_info = {
-                'zpid': zpid,
+                'zpid': prop_zpid,
                 'address': prop.get('address'),
                 'zestimate': safe_float(prop.get('zestimate')),
                 'rentalZestimate': safe_float(prop.get('rentalZestimate')),
@@ -713,7 +785,7 @@ def nearby_properties(zpid):
             }
             
             # Update with parcel data if available
-            if zpid in parcel_data:
+            if prop_zpid in parcel_data:
                 property_info.update(parcel_data[zpid])
             
             # Filter for residential properties only
@@ -732,17 +804,20 @@ def nearby_properties(zpid):
                 # Also include properties with bedrooms as likely residential
                 if not is_residential and property_info.get('bedrooms', 0) > 0:
                     is_residential = True
-                    logger.debug(f"Including property with bedrooms as residential: ZPID {zpid}, Type: {property_type}, Bedrooms: {property_info.get('bedrooms')}")
+                    logger.debug(f"Including property with bedrooms as residential: ZPID {prop_zpid}, Type: {property_type}, Bedrooms: {property_info.get('bedrooms')}")
             else:
                 # If no property type, check if it has bedrooms (likely residential)
                 if property_info.get('bedrooms', 0) > 0:
                     is_residential = True
-                    logger.debug(f"Including property with bedrooms and no type as residential: ZPID {zpid}, Bedrooms: {property_info.get('bedrooms')}")
+                    logger.debug(f"Including property with bedrooms and no type as residential: ZPID {prop_zpid}, Bedrooms: {property_info.get('bedrooms')}")
             
             # Skip non-residential properties
             if not is_residential:
-                logger.debug(f"Filtering out non-residential property: ZPID {zpid}, Type: '{property_type}', Bedrooms: {property_info.get('bedrooms', 0)}")
+                logger.debug(f"Filtering out non-residential property: ZPID {prop_zpid}, Type: '{property_type}', Bedrooms: {property_info.get('bedrooms', 0)}")
                 continue
+            
+            # Check if property type matches source property type
+            is_compatible = are_property_types_compatible(source_property_type, property_type)
             
             # Calculate cap rate
             if property_info['zestimate'] > 0:
@@ -753,9 +828,24 @@ def nearby_properties(zpid):
             else:
                 property_info['capRate'] = 0
             
-            nearby_properties.append(property_info)
+            if is_compatible:
+                compatible_properties.append(property_info)
+                logger.debug(f"Compatible property: ZPID {prop_zpid}, Type: '{property_type}' matches source type: '{source_property_type}'")
+            else:
+                nearby_properties.append(property_info)
+                logger.debug(f"Residential but different type: ZPID {prop_zpid}, Type: '{property_type}' vs source: '{source_property_type}'")
         
-        logger.debug(f"Filtered to {len(nearby_properties)} residential properties from {len(data['bundle'])} total nearby properties")
+        # Prioritize compatible properties, then add others if we need more
+        final_properties = compatible_properties[:20]  # Take up to 20 compatible properties first
+        
+        if len(final_properties) < 20:
+            # Add other residential properties to reach 20 if needed
+            remaining_slots = 20 - len(final_properties)
+            final_properties.extend(nearby_properties[:remaining_slots])
+        
+        nearby_properties = final_properties
+        
+        logger.debug(f"Filtered to {len(nearby_properties)} properties ({len(compatible_properties)} compatible + {len(nearby_properties) - len(compatible_properties)} other residential) from {len(data['bundle'])} total nearby properties")
         
         # If no residential properties found, return a limited set of all properties as fallback
         if not nearby_properties and data['bundle']:
