@@ -661,8 +661,25 @@ def nearby_properties(zpid):
             
             time.sleep(1)  # Rate limiting between batches
         
-        # Process and combine the data
+        # Process and combine the data - filter for residential properties only
         nearby_properties = []
+        residential_property_types = [
+            'Single Family Residential',
+            'Single Family Dwelling',
+            'Residential',
+            'Single-Family',
+            'Duplex',
+            'Triplex',
+            'Quadruplex',
+            'Condominium',
+            'Apartment',
+            'Townhouse',
+            'Multi-Family',
+            'Residential Condo',
+            'Mobile Home',
+            'Manufactured Home'
+        ]
+        
         for prop in data['bundle']:
             zpid = str(prop.get('zpid'))
             property_info = {
@@ -683,6 +700,23 @@ def nearby_properties(zpid):
             if zpid in parcel_data:
                 property_info.update(parcel_data[zpid])
             
+            # Filter for residential properties only
+            property_type = property_info.get('propertyType', '').strip()
+            is_residential = False
+            
+            if property_type:
+                # Check if property type contains any residential keywords
+                property_type_lower = property_type.lower()
+                for residential_type in residential_property_types:
+                    if residential_type.lower() in property_type_lower:
+                        is_residential = True
+                        break
+            
+            # Skip non-residential properties
+            if not is_residential:
+                logger.debug(f"Filtering out non-residential property: ZPID {zpid}, Type: {property_type}")
+                continue
+            
             # Calculate cap rate
             if property_info['zestimate'] > 0:
                 property_info['capRate'] = round(
@@ -694,7 +728,7 @@ def nearby_properties(zpid):
             
             nearby_properties.append(property_info)
         
-        logger.debug(f"Returning {len(nearby_properties)} properties with parcel data")
+        logger.debug(f"Filtered to {len(nearby_properties)} residential properties from {len(data['bundle'])} total nearby properties")
         return jsonify(nearby_properties), 200
         
     except Exception as e:
