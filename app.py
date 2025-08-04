@@ -264,92 +264,6 @@ def search_properties_by_address(address):
     logger.info("Direct address search failed, trying fallback city/zip search")
     return search_properties_by_address_fallback(address)
 
-def are_property_types_compatible(source_type, target_type):
-    """Check if two property types are compatible for comparison - strict matching"""
-    if not source_type or not target_type:
-        return False  # If we don't know the type, don't allow it for better filtering
-    
-    source_type = source_type.lower().strip()
-    target_type = target_type.lower().strip()
-    
-    # Define strict property type groups for matching
-    single_family_types = [
-        'single family residential', 
-        'single family dwelling', 
-        'single-family residential',
-        'residential single family',
-        'detached single family', 
-        'single family detached'
-    ]
-    
-    condo_types = [
-        'condominium', 
-        'condo', 
-        'residential condo', 
-        'condominium unit',
-        'townhouse', 
-        'townhome', 
-        'row house',
-        'townhouse residential'
-    ]
-    
-    multi_family_types = [
-        'duplex', 
-        'triplex', 
-        'quadruplex', 
-        'multi-family', 
-        'multifamily',
-        'apartment', 
-        'apartment building', 
-        '2-4 family',
-        'multi family residential'
-    ]
-    
-    mobile_home_types = [
-        'mobile home', 
-        'manufactured home', 
-        'mobile home park',
-        'manufactured housing', 
-        'trailer',
-        'mobile home residential'
-    ]
-    
-    # Check if both types are in the same specific category
-    type_groups = [
-        ('single_family', single_family_types),
-        ('condo', condo_types), 
-        ('multi_family', multi_family_types),
-        ('mobile_home', mobile_home_types)
-    ]
-    
-    source_category = None
-    target_category = None
-    
-    # Determine source category
-    for category_name, group in type_groups:
-        if any(group_type in source_type for group_type in group):
-            source_category = category_name
-            break
-    
-    # Determine target category  
-    for category_name, group in type_groups:
-        if any(group_type in target_type for group_type in group):
-            target_category = category_name
-            break
-    
-    # Only match if both are in the same specific category
-    if source_category and target_category and source_category == target_category:
-        return True
-    
-    # Special case: if source is "Single Family Residential" and target is generic "Residential"
-    # but only if target is NOT mobile home, condo, or multi-family
-    if source_category == 'single_family' and 'residential' in target_type:
-        # Make sure target is not in other specific categories
-        if not any(category in target_category for category in ['mobile_home', 'condo', 'multi_family'] if target_category):
-            return True
-    
-    return False
-
 def search_properties_by_address_fallback(address):
     """Fallback search using city/zip when address.full doesn't work"""
     components = parse_address_components(address)
@@ -680,38 +594,12 @@ def nearby_properties(zpid):
             logger.error(f"Property coordinates not found for ZPID: {zpid}")
             return jsonify({"error": "Property coordinates not found"}), 404
             
-        # Always get the source property type from parcels API (zestimates API doesn't have landUseDescription)
-        source_property_type = None
-        logger.debug(f"Getting source property type from parcels API for ZPID: {zpid}")
-        
-        source_parcel_response = http.get(
-            "https://api.bridgedataoutput.com/api/v2/pub/parcels",
-            params={
-                "access_token": API_KEY,
-                "zpid": zpid
-            }
-        )
-        
-        if source_parcel_response.status_code == 200:
-            source_parcel_data = source_parcel_response.json()
-            if source_parcel_data.get('bundle'):
-                source_property_type = source_parcel_data['bundle'][0].get('landUseDescription')
-                logger.info(f"Source property ZPID {zpid} has landUseDescription: '{source_property_type}'")
-            else:
-                logger.warning(f"No parcel data found for source ZPID: {zpid}")
-        else:
-            logger.error(f"Failed to get source parcel data. Status: {source_parcel_response.status_code}")
-        
-        if not source_property_type:
-            logger.warning(f"Could not determine source property type for ZPID: {zpid}, proceeding without strict filtering")
-            return jsonify([]), 200
-        
-        # Get nearby properties - increase limit to get more candidates before filtering
+        # Get nearby properties
         logger.debug(f"Getting nearby properties for coordinates: {longitude},{latitude}")
         response = http.get(api_url, params={
             "access_token": API_KEY,
             "near": f"{longitude},{latitude}",
-            "limit": 50  # Get more candidates to filter down to 20 matches
+            "limit": 20
         })
         
         if response.status_code != 200:
@@ -789,50 +677,13 @@ def nearby_properties(zpid):
             
             time.sleep(1)  # Rate limiting between batches
         
-        # Process and combine the data - filter for matching property types
+        # Process and combine the data
         nearby_properties = []
-        compatible_properties = []
-        residential_property_types = [
-            'Single Family Residential',
-            'Single Family Dwelling',
-            'Residential',
-            'Single-Family',
-            'Duplex',
-            'Triplex',
-            'Quadruplex',
-            'Condominium',
-            'Apartment',
-            'Townhouse',
-            'Multi-Family',
-            'Residential Condo',
-            'Mobile Home',
-            'Manufactured Home'
-        ]
-        
-        # Property types to exclude completely
-        excluded_property_types = [
-            'vacant land',
-            'residential vacant land',
-            'vacant',
-            'land',
-            'commercial',
-            'industrial',
-            'retail',
-            'office',
-            'warehouse',
-            'parking'
-        ]
         
         for prop in data['bundle']:
-            prop_zpid = str(prop.get('zpid'))
-            
-            # Skip the source property itself
-            if prop_zpid == str(zpid):
-                logger.debug(f"Skipping source property ZPID: {prop_zpid}")
-                continue
-                
+            zpid = str(prop.get('zpid'))
             property_info = {
-                'zpid': prop_zpid,
+                'zpid': zpid,
                 'address': prop.get('address'),
                 'zestimate': safe_float(prop.get('zestimate')),
                 'rentalZestimate': safe_float(prop.get('rentalZestimate')),
@@ -845,61 +696,9 @@ def nearby_properties(zpid):
                 'propertyType': None
             }
             
-            # Update with parcel data if available - REQUIRED for property type filtering
-            if prop_zpid in parcel_data:
-                property_info.update(parcel_data[prop_zpid])
-            else:
-                # Skip properties without parcel data since we can't determine their type
-                logger.debug(f"Skipping property without parcel data: ZPID {prop_zpid}")
-                continue
-            
-            # Filter for residential properties only
-            property_type = property_info.get('propertyType') or ''
-            property_type = property_type.strip() if property_type else ''
-            property_type_lower = property_type.lower()
-            
-            logger.debug(f"Property ZPID {prop_zpid} has landUseDescription: '{property_type}'")
-            
-            # First check if it's an excluded property type (vacant land, commercial, etc.)
-            is_excluded = False
-            if property_type:
-                for excluded_type in excluded_property_types:
-                    if excluded_type.lower() in property_type_lower:
-                        is_excluded = True
-                        logger.debug(f"Excluding property type: ZPID {prop_zpid}, Type: '{property_type}'")
-                        break
-            
-            if is_excluded:
-                continue
-            
-            # Now check if it's residential
-            is_residential = False
-            
-            if property_type:
-                # Check if property type contains any residential keywords
-                for residential_type in residential_property_types:
-                    if residential_type.lower() in property_type_lower:
-                        is_residential = True
-                        break
-                
-                # Also include properties with bedrooms as likely residential
-                if not is_residential and property_info.get('bedrooms', 0) > 0:
-                    is_residential = True
-                    logger.debug(f"Including property with bedrooms as residential: ZPID {prop_zpid}, Type: {property_type}, Bedrooms: {property_info.get('bedrooms')}")
-            else:
-                # If no property type, check if it has bedrooms (likely residential)
-                if property_info.get('bedrooms', 0) > 0:
-                    is_residential = True
-                    logger.debug(f"Including property with bedrooms and no type as residential: ZPID {prop_zpid}, Bedrooms: {property_info.get('bedrooms')}")
-            
-            # Skip non-residential properties
-            if not is_residential:
-                logger.debug(f"Filtering out non-residential property: ZPID {prop_zpid}, Type: '{property_type}', Bedrooms: {property_info.get('bedrooms', 0)}")
-                continue
-            
-            # Check if property type matches source property type
-            is_compatible = are_property_types_compatible(source_property_type, property_type)
-            logger.debug(f"Property type compatibility check: Source='{source_property_type}' vs Target='{property_type}' -> Compatible={is_compatible}")
+            # Update with parcel data if available
+            if zpid in parcel_data:
+                property_info.update(parcel_data[zpid])
             
             # Calculate cap rate
             if property_info['zestimate'] > 0:
@@ -910,60 +709,9 @@ def nearby_properties(zpid):
             else:
                 property_info['capRate'] = 0
             
-            if is_compatible:
-                compatible_properties.append(property_info)
-                logger.info(f"✅ COMPATIBLE: ZPID {prop_zpid}, Type: '{property_type}' matches source type: '{source_property_type}'")
-            else:
-                nearby_properties.append(property_info)
-                logger.info(f"❌ DIFFERENT TYPE: ZPID {prop_zpid}, Type: '{property_type}' vs source: '{source_property_type}'")
+            nearby_properties.append(property_info)
         
-        # Prioritize compatible properties, then add others if we need more
-        final_properties = compatible_properties[:20]  # Take up to 20 compatible properties first
-        
-        if len(final_properties) < 20:
-            # Add other residential properties to reach 20 if needed
-            remaining_slots = 20 - len(final_properties)
-            final_properties.extend(nearby_properties[:remaining_slots])
-        
-        nearby_properties = final_properties
-        
-        compatible_count = len(compatible_properties)
-        other_count = len(nearby_properties) - compatible_count
-        logger.info(f"Source property type: '{source_property_type}' -> Found {len(nearby_properties)} properties ({compatible_count} compatible + {other_count} other residential) from {len(data['bundle'])} total nearby properties")
-        
-        # If no residential properties found, return a limited set of all properties as fallback
-        if not nearby_properties and data['bundle']:
-            logger.warning("No residential properties found with filtering, returning all properties as fallback")
-            for prop in data['bundle'][:10]:  # Limit to 10 properties as fallback
-                zpid = str(prop.get('zpid'))
-                property_info = {
-                    'zpid': zpid,
-                    'address': prop.get('address'),
-                    'zestimate': safe_float(prop.get('zestimate')),
-                    'rentalZestimate': safe_float(prop.get('rentalZestimate')),
-                    'latitude': prop.get('Latitude'),
-                    'longitude': prop.get('Longitude'),
-                    'bedrooms': 0,
-                    'bathrooms': 0,
-                    'livingArea': 0,
-                    'yearBuilt': 'N/A',
-                    'propertyType': None
-                }
-                
-                # Update with parcel data if available
-                if zpid in parcel_data:
-                    property_info.update(parcel_data[zpid])
-                
-                # Calculate cap rate
-                if property_info['zestimate'] > 0:
-                    property_info['capRate'] = round(
-                        (property_info['rentalZestimate'] * 12 * 0.60 / property_info['zestimate'] * 100),
-                        2
-                    )
-                else:
-                    property_info['capRate'] = 0
-                
-                nearby_properties.append(property_info)
+        logger.debug(f"Returning {len(nearby_properties)} nearby properties from {len(data['bundle'])} total properties")
         
         return jsonify(nearby_properties), 200
         
