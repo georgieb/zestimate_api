@@ -222,7 +222,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             const response = await fetch(`/api/nearby-properties/${zpid}`);
-            if (!response.ok) throw new Error('Failed to fetch nearby properties');
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                throw new Error(`Failed to fetch nearby properties: ${errorData.error || response.statusText}`);
+            }
             
             const properties = await response.json();
             

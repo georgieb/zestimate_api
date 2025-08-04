@@ -563,38 +563,54 @@ def nearby_page(zpid):
 @app.route('/api/nearby-properties/<zpid>', methods=['GET'])
 def nearby_properties(zpid):
     try:
-        logger.debug(f"Fetching nearby properties for ZPID: {zpid}")
+        logger.info(f"Fetching nearby properties for ZPID: {zpid}")
         api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
         
         # First get the source property
+        logger.debug(f"Getting source property data for ZPID: {zpid}")
         response = http.get(api_url, params={
             "access_token": API_KEY,
             "zpid": zpid
         })
-        response.raise_for_status()
+        
+        if response.status_code != 200:
+            logger.error(f"Failed to get source property. Status: {response.status_code}, Response: {response.text}")
+            return jsonify({"error": f"Failed to get source property: {response.status_code}"}), 500
+            
         source_data = response.json()
+        logger.debug(f"Source property response: {source_data}")
         
         if not source_data.get('bundle'):
+            logger.warning(f"No source property found for ZPID: {zpid}")
             return jsonify({"error": "Source property not found"}), 404
             
         property_data = source_data['bundle'][0]
         latitude = property_data.get('Latitude')
         longitude = property_data.get('Longitude')
         
+        logger.debug(f"Source property coordinates: lat={latitude}, lng={longitude}")
+        
         if not (latitude and longitude):
+            logger.error(f"Property coordinates not found for ZPID: {zpid}")
             return jsonify({"error": "Property coordinates not found"}), 404
             
         # Get nearby properties
+        logger.debug(f"Getting nearby properties for coordinates: {longitude},{latitude}")
         response = http.get(api_url, params={
             "access_token": API_KEY,
             "near": f"{longitude},{latitude}",
             "limit": 20
         })
-        response.raise_for_status()
+        
+        if response.status_code != 200:
+            logger.error(f"Failed to get nearby properties. Status: {response.status_code}, Response: {response.text}")
+            return jsonify({"error": f"Failed to get nearby properties: {response.status_code}"}), 500
+            
         data = response.json()
-        logger.debug(f"Nearby properties response: {data}")
+        logger.debug(f"Nearby properties API response success: {data.get('success', False)}, count: {len(data.get('bundle', []))}")
         
         if not data or not data.get('bundle'):
+            logger.info("No nearby properties found, returning empty list")
             return jsonify([]), 200
 
         # Extract all zpids from the nearby properties
@@ -777,8 +793,8 @@ def nearby_properties(zpid):
         return jsonify(nearby_properties), 200
         
     except Exception as e:
-        logger.error(f"Error in nearby properties: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error in nearby properties for ZPID {zpid}: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
     
 @app.route('/api/save-portfolio', methods=['POST'])
 def save_portfolio():
