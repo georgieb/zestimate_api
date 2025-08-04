@@ -202,24 +202,78 @@ def find_best_address_match(address, nearby_zpids):
         return []
 
 def search_properties_by_address(address):
-    """Search for properties by address using Bridge parcels API address filtering"""
+    """Search for properties by address using Bridge parcels API address.full parameter"""
     if not address:
         return []
     
     logger.info(f"Searching for property at address: {address}")
     
+    parcels_url = "https://api.bridgedataoutput.com/api/v2/pub/parcels"
+    
+    # Normalize the address for search
+    normalized_address = normalize_address(address)
+    
+    # Try multiple search strategies
+    search_attempts = [
+        # Strategy 1: Exact address as provided
+        {"address.full": address},
+        # Strategy 2: Normalized address
+        {"address.full": normalized_address},
+        # Strategy 3: Try with different comma placement
+        {"address.full": address.replace(",", "")},
+        # Strategy 4: Try with title case
+        {"address.full": address.title()},
+    ]
+    
+    for attempt_num, search_params in enumerate(search_attempts, 1):
+        try:
+            params = {
+                "access_token": API_KEY,
+                **search_params
+            }
+            
+            logger.info(f"Attempt {attempt_num}: Searching with address.full = '{list(search_params.values())[0]}'")
+            
+            response = http.get(parcels_url, params=params)
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            if data.get('success') and data.get('bundle'):
+                zpids = []
+                for parcel in data['bundle']:
+                    zpid = parcel.get('zpid')
+                    if zpid:
+                        zpids.append(str(zpid))
+                        parcel_address = parcel.get('address', {})
+                        if isinstance(parcel_address, dict):
+                            full_addr = parcel_address.get('full', 'N/A')
+                        else:
+                            full_addr = str(parcel_address)
+                        logger.info(f"MATCH FOUND: {full_addr} -> ZPID {zpid}")
+                
+                if zpids:
+                    logger.info(f"Successfully found {len(zpids)} properties on attempt {attempt_num}")
+                    return zpids
+            
+        except Exception as e:
+            logger.error(f"Attempt {attempt_num} failed: {str(e)}")
+            continue
+    
+    # If direct address.full searches didn't work, try fallback with city/zip area search
+    logger.info("Direct address search failed, trying fallback city/zip search")
+    return search_properties_by_address_fallback(address)
+
+def search_properties_by_address_fallback(address):
+    """Fallback search using city/zip when address.full doesn't work"""
     components = parse_address_components(address)
-    search_house_number = components.get('house_number', '').lower()
-    search_street = components.get('street', '').lower()
     search_city = components.get('city', '')
-    search_state = components.get('state', '')
     search_zip = components.get('zip', '')
     
     if not search_city or not search_zip:
-        logger.warning(f"Address missing required city or zip: {address}")
+        logger.warning(f"Fallback failed - address missing city or zip: {address}")
         return []
     
-    # Step 1: Search parcels API by city and zip to get properties in the area
     parcels_url = "https://api.bridgedataoutput.com/api/v2/pub/parcels"
     
     try:
@@ -227,10 +281,10 @@ def search_properties_by_address(address):
             "access_token": API_KEY,
             "address.city": search_city,
             "address.zip": search_zip,
-            "limit": 100  # Get more results to search through
+            "limit": 100
         }
         
-        logger.info(f"Searching parcels in {search_city}, {search_state} {search_zip}")
+        logger.info(f"Fallback: Searching parcels in {search_city}, {search_zip}")
         
         response = http.get(parcels_url, params=params)
         response.raise_for_status()
@@ -238,58 +292,44 @@ def search_properties_by_address(address):
         data = response.json()
         
         if not data.get('success') or not data.get('bundle'):
-            logger.warning(f"No parcels found in {search_city}, {search_zip}")
+            logger.warning(f"Fallback: No parcels found in {search_city}, {search_zip}")
             return []
         
-        logger.info(f"Found {len(data['bundle'])} parcels in area, filtering for exact address match")
+        # Look for exact address matches in the area results
+        search_house_number = components.get('house_number', '').lower()
+        search_street = components.get('street', '').lower()
         
-        # Step 2: Filter results for exact address match
         matching_zpids = []
         
         for parcel in data['bundle']:
             parcel_address = parcel.get('address', {})
             
-            # Handle both string and object address formats
             if isinstance(parcel_address, dict):
-                parcel_full_address = parcel_address.get('full', '').lower()
                 parcel_house = str(parcel_address.get('house', '')).lower()
                 parcel_street = parcel_address.get('street', '').lower()
+                full_addr = parcel_address.get('full', '')
             else:
-                parcel_full_address = str(parcel_address).lower()
-                # Try to parse house number from full address
-                house_match = re.match(r'^(\d+)\s+(.+)', parcel_full_address.strip())
+                # Try to parse from string
+                house_match = re.match(r'^(\d+)\s+(.+)', str(parcel_address).strip())
                 if house_match:
-                    parcel_house = house_match.group(1)
-                    parcel_street = house_match.group(2)
+                    parcel_house = house_match.group(1).lower()
+                    parcel_street = house_match.group(2).lower()
                 else:
-                    parcel_house = ''
-                    parcel_street = parcel_full_address
+                    continue
+                full_addr = str(parcel_address)
             
-            # Check for house number match
-            if search_house_number and parcel_house:
-                if search_house_number == parcel_house:
-                    # Check for street name match (flexible)
-                    if search_street and parcel_street:
-                        # Normalize both street names for comparison
-                        search_street_norm = re.sub(r'\b(dr|drive|st|street|ave|avenue|ct|court|ln|lane|rd|road|way|pl|place)\b', '', search_street).strip()
-                        parcel_street_norm = re.sub(r'\b(dr|drive|st|street|ave|avenue|ct|court|ln|lane|rd|road|way|pl|place)\b', '', parcel_street).strip()
-                        
-                        # Check if core street names match
-                        if search_street_norm in parcel_street_norm or parcel_street_norm in search_street_norm:
-                            zpid = parcel.get('zpid')
-                            if zpid:
-                                logger.info(f"EXACT MATCH: {parcel_full_address} -> ZPID {zpid}")
-                                matching_zpids.append(str(zpid))
+            # Check for house number and street match
+            if (search_house_number and parcel_house and search_house_number == parcel_house and
+                search_street and parcel_street and search_street in parcel_street):
+                zpid = parcel.get('zpid')
+                if zpid:
+                    logger.info(f"Fallback MATCH: {full_addr} -> ZPID {zpid}")
+                    matching_zpids.append(str(zpid))
         
-        if matching_zpids:
-            logger.info(f"Found {len(matching_zpids)} exact address matches")
-            return matching_zpids
-        else:
-            logger.warning(f"No exact address matches found for {address} in {len(data['bundle'])} parcels")
-            return []
+        return matching_zpids
         
     except Exception as e:
-        logger.error(f"Error searching properties by address: {str(e)}")
+        logger.error(f"Fallback search failed: {str(e)}")
         return []
 
 def get_living_area_from_parcel(areas):
