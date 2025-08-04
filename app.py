@@ -711,10 +711,20 @@ def nearby_properties(zpid):
                     if residential_type.lower() in property_type_lower:
                         is_residential = True
                         break
+                
+                # Also include properties with bedrooms as likely residential
+                if not is_residential and property_info.get('bedrooms', 0) > 0:
+                    is_residential = True
+                    logger.debug(f"Including property with bedrooms as residential: ZPID {zpid}, Type: {property_type}, Bedrooms: {property_info.get('bedrooms')}")
+            else:
+                # If no property type, check if it has bedrooms (likely residential)
+                if property_info.get('bedrooms', 0) > 0:
+                    is_residential = True
+                    logger.debug(f"Including property with bedrooms and no type as residential: ZPID {zpid}, Bedrooms: {property_info.get('bedrooms')}")
             
             # Skip non-residential properties
             if not is_residential:
-                logger.debug(f"Filtering out non-residential property: ZPID {zpid}, Type: {property_type}")
+                logger.debug(f"Filtering out non-residential property: ZPID {zpid}, Type: '{property_type}', Bedrooms: {property_info.get('bedrooms', 0)}")
                 continue
             
             # Calculate cap rate
@@ -729,6 +739,41 @@ def nearby_properties(zpid):
             nearby_properties.append(property_info)
         
         logger.debug(f"Filtered to {len(nearby_properties)} residential properties from {len(data['bundle'])} total nearby properties")
+        
+        # If no residential properties found, return a limited set of all properties as fallback
+        if not nearby_properties and data['bundle']:
+            logger.warning("No residential properties found with filtering, returning all properties as fallback")
+            for prop in data['bundle'][:10]:  # Limit to 10 properties as fallback
+                zpid = str(prop.get('zpid'))
+                property_info = {
+                    'zpid': zpid,
+                    'address': prop.get('address'),
+                    'zestimate': safe_float(prop.get('zestimate')),
+                    'rentalZestimate': safe_float(prop.get('rentalZestimate')),
+                    'latitude': prop.get('Latitude'),
+                    'longitude': prop.get('Longitude'),
+                    'bedrooms': 0,
+                    'bathrooms': 0,
+                    'livingArea': 0,
+                    'yearBuilt': 'N/A',
+                    'propertyType': None
+                }
+                
+                # Update with parcel data if available
+                if zpid in parcel_data:
+                    property_info.update(parcel_data[zpid])
+                
+                # Calculate cap rate
+                if property_info['zestimate'] > 0:
+                    property_info['capRate'] = round(
+                        (property_info['rentalZestimate'] * 12 * 0.60 / property_info['zestimate'] * 100),
+                        2
+                    )
+                else:
+                    property_info['capRate'] = 0
+                
+                nearby_properties.append(property_info)
+        
         return jsonify(nearby_properties), 200
         
     except Exception as e:
