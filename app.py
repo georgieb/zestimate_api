@@ -208,54 +208,63 @@ def find_best_address_match(address, nearby_zpids):
     if not nearby_zpids or not address:
         return []
     
-    # Get property details for nearby properties to compare addresses
-    try:
-        # Use the existing get_parcel_data_batch function to get addresses
-        parcel_data = get_parcel_data_batch(nearby_zpids[:10])  # Limit to avoid too many API calls
-        
-        # Normalize the search address for comparison
-        search_address_normalized = normalize_address(address).lower()
-        search_components = parse_address_components(address)
-        
-        matches = []
-        
-        # Try to get addresses from zestimates API first
-        api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
-        
-        for zpid in nearby_zpids[:5]:  # Check first 5 nearby properties
-            try:
-                response = http.get(api_url, params={
-                    "access_token": API_KEY,
-                    "zpid": zpid
-                })
-                response.raise_for_status()
-                data = response.json()
+    search_components = parse_address_components(address)
+    search_house_number = search_components.get('house_number', '').lower()
+    search_street = search_components.get('street', '').lower().replace('nw', 'northwest').replace('ne', 'northeast').replace('sw', 'southwest').replace('se', 'southeast')
+    search_city = search_components.get('city', '').lower()
+    
+    logger.info(f"Looking for match - House: {search_house_number}, Street: {search_street}, City: {search_city}")
+    logger.info(f"Checking {len(nearby_zpids)} nearby properties for address match")
+    
+    # Get addresses from zestimates API to compare
+    api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
+    
+    exact_matches = []
+    close_matches = []
+    
+    for i, zpid in enumerate(nearby_zpids[:15]):  # Check more properties
+        try:
+            response = http.get(api_url, params={
+                "access_token": API_KEY,
+                "zpid": zpid
+            })
+            response.raise_for_status()
+            data = response.json()
+            
+            if data.get('bundle'):
+                prop = data['bundle'][0]
+                prop_address = prop.get('address', '').lower()
                 
-                if data.get('bundle'):
-                    prop = data['bundle'][0]
-                    prop_address = prop.get('address', '')
+                if prop_address:
+                    logger.info(f"Property {i+1}: ZPID {zpid} = '{prop_address}'")
                     
-                    if prop_address:
-                        prop_address_normalized = normalize_address(prop_address).lower()
+                    # Simple but effective matching - look for house number in the address
+                    if search_house_number and search_house_number in prop_address:
+                        # Also check if street name appears (even partially)
+                        street_words = search_street.split()
+                        street_matches = 0
+                        for word in street_words:
+                            if len(word) > 2 and word in prop_address:  # Skip tiny words like "nw"
+                                street_matches += 1
                         
-                        # Check for exact or close match
-                        if search_components.get('house_number') in prop_address_normalized:
-                            if search_components.get('street', '').lower() in prop_address_normalized:
-                                matches.append(zpid)
-                                logger.info(f"Found address match: {prop_address} for search: {address}")
-                                break
-                
-                time.sleep(0.5)  # Rate limiting
-                
-            except Exception as e:
-                logger.error(f"Error checking address for ZPID {zpid}: {str(e)}")
-                continue
-        
-        return matches
-        
-    except Exception as e:
-        logger.error(f"Error in address matching: {str(e)}")
-        return nearby_zpids[:1] if nearby_zpids else []  # Return first result as fallback
+                        if street_matches > 0:
+                            logger.info(f"*** MATCH FOUND: House number {search_house_number} and street components found in {prop_address}")
+                            exact_matches.append(zpid)
+                            break  # Take the first good match
+            
+            time.sleep(0.2)  # Rate limiting
+            
+        except Exception as e:
+            logger.error(f"Error checking address for ZPID {zpid}: {str(e)}")
+            continue
+    
+    # Return the best match found
+    if exact_matches:
+        logger.info(f"Returning exact match: {exact_matches[0]}")
+        return exact_matches[:1]
+    else:
+        logger.warning(f"No address matches found for {address}")
+        return []
 
 def search_properties_by_address(address):
     """Search for properties by address using geocoding + coordinate search"""
@@ -274,7 +283,7 @@ def search_properties_by_address(address):
     nearby_zpids = search_properties_near_coordinates(
         geo_result['latitude'], 
         geo_result['longitude'],
-        limit=20
+        limit=50  # Increased limit to find more properties
     )
     
     if not nearby_zpids:
@@ -288,8 +297,8 @@ def search_properties_by_address(address):
         logger.info(f"Found {len(matching_zpids)} matching properties for {address}")
         return matching_zpids
     else:
-        logger.info(f"No exact address match found, returning closest property")
-        return nearby_zpids[:1]  # Return the closest property as a fallback
+        logger.warning(f"No exact address match found for {address}. Address may not exist in database or may be formatted differently.")
+        return []  # Don't return wrong properties - return empty if no match
 
 def get_living_area_from_parcel(areas):
     """Extract living area from parcel data areas, checking multiple area types"""
@@ -762,6 +771,66 @@ def validate_address():
         logger.error(f"Error validating address: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/debug-address', methods=['POST'])
+def debug_address():
+    """Debug endpoint to test geocoding step by step"""
+    data = request.json
+    address = data.get('address', '')
+    
+    if not address:
+        return jsonify({"error": "Address is required"}), 400
+    
+    result = {
+        "address": address,
+        "steps": {}
+    }
+    
+    try:
+        # Step 1: Parse address
+        components = parse_address_components(address)
+        result["steps"]["1_parsing"] = components
+        
+        # Step 2: Geocoding
+        geo_result = geocode_address(address)
+        result["steps"]["2_geocoding"] = geo_result
+        
+        if geo_result:
+            # Step 3: Search nearby properties
+            nearby_zpids = search_properties_near_coordinates(
+                geo_result['latitude'], 
+                geo_result['longitude'],
+                limit=20
+            )
+            result["steps"]["3_nearby_search"] = {
+                "zpids_found": nearby_zpids,
+                "count": len(nearby_zpids)
+            }
+            
+            if nearby_zpids:
+                # Step 4: Get first property details for comparison
+                api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
+                response = http.get(api_url, params={
+                    "access_token": API_KEY,
+                    "zpid": nearby_zpids[0]
+                })
+                response.raise_for_status()
+                prop_data = response.json()
+                
+                if prop_data.get('bundle'):
+                    prop = prop_data['bundle'][0]
+                    result["steps"]["4_first_property"] = {
+                        "zpid": nearby_zpids[0],
+                        "address": prop.get('address'),
+                        "latitude": prop.get('Latitude'),
+                        "longitude": prop.get('Longitude')
+                    }
+        
+        return jsonify(result), 200
+        
+    except Exception as e:
+        result["error"] = str(e)
+        return jsonify(result), 500
+
 @app.route('/api/parse-input', methods=['POST'])
 def parse_input():
     """Parse mixed input of addresses and ZPIDs"""
@@ -814,7 +883,7 @@ def parse_input():
                 elif not components.get('house_number'):
                     result["message"] = "Address missing house number"
                 else:
-                    result["message"] = "Address not found in property database"
+                    result["message"] = "Address geocoded successfully but exact property not found in database. Try checking the address format or use the ZPID instead."
             
             address_results.append(result)
         
