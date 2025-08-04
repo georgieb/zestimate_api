@@ -717,7 +717,8 @@ def nearby_properties(zpid):
                 property_info.update(parcel_data[zpid])
             
             # Filter for residential properties only
-            property_type = property_info.get('propertyType', '').strip()
+            property_type = property_info.get('propertyType') or ''
+            property_type = property_type.strip() if property_type else ''
             is_residential = False
             
             if property_type:
