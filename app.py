@@ -594,6 +594,26 @@ def nearby_properties(zpid):
             logger.error(f"Property coordinates not found for ZPID: {zpid}")
             return jsonify({"error": "Property coordinates not found"}), 404
             
+        # Get source property type from parcels API for filtering
+        source_property_type = None
+        try:
+            source_parcel_response = http.get(
+                "https://api.bridgedataoutput.com/api/v2/pub/parcels",
+                params={
+                    "access_token": API_KEY,
+                    "zpid": zpid
+                }
+            )
+            if source_parcel_response.status_code == 200:
+                source_parcel_data = source_parcel_response.json()
+                if source_parcel_data.get('bundle'):
+                    source_property_type = source_parcel_data['bundle'][0].get('landUseDescription')
+                    logger.info(f"Source property type: '{source_property_type}'")
+        except Exception as e:
+            logger.warning(f"Could not get source property type: {e}")
+        
+        logger.debug(f"Source property type for filtering: {source_property_type}")
+            
         # Get nearby properties
         logger.debug(f"Getting nearby properties for coordinates: {longitude},{latitude}")
         response = http.get(api_url, params={
@@ -677,13 +697,19 @@ def nearby_properties(zpid):
             
             time.sleep(1)  # Rate limiting between batches
         
-        # Process and combine the data
-        nearby_properties = []
+        # Process and combine the data with simple property type prioritization
+        matching_properties = []
+        other_properties = []
         
         for prop in data['bundle']:
-            zpid = str(prop.get('zpid'))
+            prop_zpid = str(prop.get('zpid'))
+            
+            # Skip the source property itself
+            if prop_zpid == str(zpid):
+                continue
+                
             property_info = {
-                'zpid': zpid,
+                'zpid': prop_zpid,
                 'address': prop.get('address'),
                 'zestimate': safe_float(prop.get('zestimate')),
                 'rentalZestimate': safe_float(prop.get('rentalZestimate')),
@@ -697,8 +723,8 @@ def nearby_properties(zpid):
             }
             
             # Update with parcel data if available
-            if zpid in parcel_data:
-                property_info.update(parcel_data[zpid])
+            if prop_zpid in parcel_data:
+                property_info.update(parcel_data[prop_zpid])
             
             # Calculate cap rate
             if property_info['zestimate'] > 0:
@@ -709,7 +735,27 @@ def nearby_properties(zpid):
             else:
                 property_info['capRate'] = 0
             
-            nearby_properties.append(property_info)
+            # Simple property type matching - prioritize same type, but include others
+            property_type = property_info.get('propertyType', '').strip()
+            
+            if source_property_type and property_type:
+                if property_type.lower() == source_property_type.lower():
+                    matching_properties.append(property_info)
+                    logger.debug(f"Matching property type: {prop_zpid} - {property_type}")
+                else:
+                    other_properties.append(property_info)
+                    logger.debug(f"Different property type: {prop_zpid} - {property_type} vs {source_property_type}")
+            else:
+                other_properties.append(property_info)
+        
+        # Combine results: matching properties first, then others to fill up to 20 total
+        nearby_properties = matching_properties[:20]  # Take up to 20 matching first
+        
+        if len(nearby_properties) < 20:
+            remaining_slots = 20 - len(nearby_properties)
+            nearby_properties.extend(other_properties[:remaining_slots])
+        
+        logger.info(f"Found {len(matching_properties)} matching properties and {len(other_properties)} other properties for source type '{source_property_type}'")
         
         logger.debug(f"Returning {len(nearby_properties)} nearby properties from {len(data['bundle'])} total properties")
         
