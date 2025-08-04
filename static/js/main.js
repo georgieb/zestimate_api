@@ -268,6 +268,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // Add function to restore original portfolio
     const restorePortfolio = () => {
         if (currentPortfolio && currentPortfolio.data) {
+            // Clear the property list first to remove nearby properties header
+            const propertyList = document.getElementById('propertyList');
+            propertyList.innerHTML = '';
+            
             updatePropertyList(currentPortfolio.data.properties);
             updateMap(currentPortfolio.data.properties);
             updateSummary(currentPortfolio.data.summary);
