@@ -680,25 +680,31 @@ def nearby_properties(zpid):
             logger.error(f"Property coordinates not found for ZPID: {zpid}")
             return jsonify({"error": "Property coordinates not found"}), 404
             
-        # Get the source property type for matching
+        # Always get the source property type from parcels API (zestimates API doesn't have landUseDescription)
         source_property_type = None
-        if 'landUseDescription' in property_data:
-            source_property_type = property_data.get('landUseDescription')
-        else:
-            # Get source property parcel data to determine type
-            source_parcel_response = http.get(
-                "https://api.bridgedataoutput.com/api/v2/pub/parcels",
-                params={
-                    "access_token": API_KEY,
-                    "zpid": zpid
-                }
-            )
-            if source_parcel_response.status_code == 200:
-                source_parcel_data = source_parcel_response.json()
-                if source_parcel_data.get('bundle'):
-                    source_property_type = source_parcel_data['bundle'][0].get('landUseDescription')
+        logger.debug(f"Getting source property type from parcels API for ZPID: {zpid}")
         
-        logger.debug(f"Source property type: {source_property_type}")
+        source_parcel_response = http.get(
+            "https://api.bridgedataoutput.com/api/v2/pub/parcels",
+            params={
+                "access_token": API_KEY,
+                "zpid": zpid
+            }
+        )
+        
+        if source_parcel_response.status_code == 200:
+            source_parcel_data = source_parcel_response.json()
+            if source_parcel_data.get('bundle'):
+                source_property_type = source_parcel_data['bundle'][0].get('landUseDescription')
+                logger.info(f"Source property ZPID {zpid} has landUseDescription: '{source_property_type}'")
+            else:
+                logger.warning(f"No parcel data found for source ZPID: {zpid}")
+        else:
+            logger.error(f"Failed to get source parcel data. Status: {source_parcel_response.status_code}")
+        
+        if not source_property_type:
+            logger.warning(f"Could not determine source property type for ZPID: {zpid}, proceeding without strict filtering")
+            return jsonify([]), 200
         
         # Get nearby properties - increase limit to get more candidates before filtering
         logger.debug(f"Getting nearby properties for coordinates: {longitude},{latitude}")
@@ -839,14 +845,20 @@ def nearby_properties(zpid):
                 'propertyType': None
             }
             
-            # Update with parcel data if available
+            # Update with parcel data if available - REQUIRED for property type filtering
             if prop_zpid in parcel_data:
                 property_info.update(parcel_data[prop_zpid])
+            else:
+                # Skip properties without parcel data since we can't determine their type
+                logger.debug(f"Skipping property without parcel data: ZPID {prop_zpid}")
+                continue
             
             # Filter for residential properties only
             property_type = property_info.get('propertyType') or ''
             property_type = property_type.strip() if property_type else ''
             property_type_lower = property_type.lower()
+            
+            logger.debug(f"Property ZPID {prop_zpid} has landUseDescription: '{property_type}'")
             
             # First check if it's an excluded property type (vacant land, commercial, etc.)
             is_excluded = False
@@ -900,10 +912,10 @@ def nearby_properties(zpid):
             
             if is_compatible:
                 compatible_properties.append(property_info)
-                logger.debug(f"Compatible property: ZPID {prop_zpid}, Type: '{property_type}' matches source type: '{source_property_type}'")
+                logger.info(f"✅ COMPATIBLE: ZPID {prop_zpid}, Type: '{property_type}' matches source type: '{source_property_type}'")
             else:
                 nearby_properties.append(property_info)
-                logger.debug(f"Residential but different type: ZPID {prop_zpid}, Type: '{property_type}' vs source: '{source_property_type}'")
+                logger.info(f"❌ DIFFERENT TYPE: ZPID {prop_zpid}, Type: '{property_type}' vs source: '{source_property_type}'")
         
         # Prioritize compatible properties, then add others if we need more
         final_properties = compatible_properties[:20]  # Take up to 20 compatible properties first
