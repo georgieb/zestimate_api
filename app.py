@@ -10,6 +10,8 @@ import time
 import re
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry  # Fixed import
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 
 # Setup logging and load environment variables
 logging.basicConfig(level=logging.DEBUG)
@@ -23,6 +25,9 @@ app = Flask(__name__,
 )
 CORS(app)
 API_KEY = os.getenv("API_KEY")
+
+# Initialize geocoder
+geolocator = Nominatim(user_agent="zestimate-api")
 
 # Configure retry strategy
 retry_strategy = Retry(
@@ -82,7 +87,7 @@ def parse_address_components(address):
     normalized = normalize_address(address)
     
     # Split address by commas to separate components
-    parts = [part.strip() for part in normalized.split(',')]
+    parts = [part.strip() for part in normalized.split(',') if part.strip()]
     
     components = {}
     
@@ -102,18 +107,30 @@ def parse_address_components(address):
         # Second part is typically city
         components['city'] = parts[1]
     
+    # Handle state and zip - could be in different formats
     if len(parts) >= 3:
-        # Third part is typically state and zip
-        state_zip = parts[2].strip().upper()
-        state_zip_match = re.match(r'^([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$', state_zip)
-        if state_zip_match:
-            components['state'] = state_zip_match.group(1)
-            components['zip'] = state_zip_match.group(2)
-        else:
-            # Try to extract just state if no zip
-            state_match = re.match(r'^([A-Z]{2})$', state_zip)
+        # Look through remaining parts for state and zip
+        for i in range(2, len(parts)):
+            part = parts[i].strip().upper()
+            
+            # Check if this part contains both state and zip
+            state_zip_match = re.match(r'^([A-Z]{2})\s+(\d{5}(?:-\d{4})?)$', part)
+            if state_zip_match:
+                components['state'] = state_zip_match.group(1)
+                components['zip'] = state_zip_match.group(2)
+                break
+            
+            # Check if this is just a state
+            state_match = re.match(r'^([A-Z]{2})$', part)
             if state_match:
                 components['state'] = state_match.group(1)
+                continue
+            
+            # Check if this is just a zip code
+            zip_match = re.match(r'^(\d{5}(?:-\d{4})?)$', part)
+            if zip_match:
+                components['zip'] = zip_match.group(1)
+                continue
     
     return components
 
@@ -123,28 +140,156 @@ def is_zpid(input_str):
         return False
     return input_str.strip().isdigit()
 
+def geocode_address(address):
+    """Geocode an address to get coordinates and normalized address"""
+    if not address:
+        return None
+    
+    try:
+        logger.debug(f"Geocoding address: {address}")
+        location = geolocator.geocode(address, exactly_one=True, timeout=10)
+        
+        if location:
+            result = {
+                'latitude': location.latitude,
+                'longitude': location.longitude,
+                'formatted_address': location.address,
+                'raw': location.raw
+            }
+            logger.debug(f"Geocoding successful: {result}")
+            return result
+        else:
+            logger.warning(f"No geocoding results for: {address}")
+            return None
+            
+    except (GeocoderTimedOut, GeocoderUnavailable) as e:
+        logger.error(f"Geocoding service error for '{address}': {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected geocoding error for '{address}': {str(e)}")
+        return None
+
+def search_properties_near_coordinates(latitude, longitude, limit=20):
+    """Search for properties near given coordinates using zestimates API"""
+    try:
+        api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
+        
+        params = {
+            "access_token": API_KEY,
+            "near": f"{longitude},{latitude}",  # Bridge API uses lng,lat format
+            "limit": limit
+        }
+        
+        logger.debug(f"Searching properties near {latitude},{longitude} with params: {params}")
+        
+        response = http.get(api_url, params=params)
+        response.raise_for_status()
+        
+        data = response.json()
+        logger.debug(f"Geographic search response: found {len(data.get('bundle', []))} properties")
+        
+        if data.get('bundle'):
+            zpids = []
+            for prop in data['bundle']:
+                zpid = prop.get('zpid')
+                if zpid:
+                    zpids.append(str(zpid))
+            
+            return zpids
+        
+        return []
+        
+    except Exception as e:
+        logger.error(f"Error searching properties near coordinates: {str(e)}")
+        return []
+
+def find_best_address_match(address, nearby_zpids):
+    """Find the best matching property from nearby results by comparing addresses"""
+    if not nearby_zpids or not address:
+        return []
+    
+    # Get property details for nearby properties to compare addresses
+    try:
+        # Use the existing get_parcel_data_batch function to get addresses
+        parcel_data = get_parcel_data_batch(nearby_zpids[:10])  # Limit to avoid too many API calls
+        
+        # Normalize the search address for comparison
+        search_address_normalized = normalize_address(address).lower()
+        search_components = parse_address_components(address)
+        
+        matches = []
+        
+        # Try to get addresses from zestimates API first
+        api_url = "https://api.bridgedataoutput.com/api/v2/zestimates_v2/zestimates"
+        
+        for zpid in nearby_zpids[:5]:  # Check first 5 nearby properties
+            try:
+                response = http.get(api_url, params={
+                    "access_token": API_KEY,
+                    "zpid": zpid
+                })
+                response.raise_for_status()
+                data = response.json()
+                
+                if data.get('bundle'):
+                    prop = data['bundle'][0]
+                    prop_address = prop.get('address', '')
+                    
+                    if prop_address:
+                        prop_address_normalized = normalize_address(prop_address).lower()
+                        
+                        # Check for exact or close match
+                        if search_components.get('house_number') in prop_address_normalized:
+                            if search_components.get('street', '').lower() in prop_address_normalized:
+                                matches.append(zpid)
+                                logger.info(f"Found address match: {prop_address} for search: {address}")
+                                break
+                
+                time.sleep(0.5)  # Rate limiting
+                
+            except Exception as e:
+                logger.error(f"Error checking address for ZPID {zpid}: {str(e)}")
+                continue
+        
+        return matches
+        
+    except Exception as e:
+        logger.error(f"Error in address matching: {str(e)}")
+        return nearby_zpids[:1] if nearby_zpids else []  # Return first result as fallback
+
 def search_properties_by_address(address):
-    """Search for properties by address - try multiple approaches"""
+    """Search for properties by address using geocoding + coordinate search"""
     if not address:
         return []
     
-    components = parse_address_components(address)
-    logger.debug(f"Parsed address components: {components}")
+    logger.info(f"Searching for property at address: {address}")
     
-    # For now, return empty array with helpful logging
-    # The Bridge Data Output API parcels endpoint doesn't seem to support address-based searches
-    # with the current API key configuration
+    # Step 1: Geocode the address
+    geo_result = geocode_address(address)
+    if not geo_result:
+        logger.warning(f"Could not geocode address: {address}")
+        return []
     
-    logger.info(f"Address search not yet supported via API. Address parsed successfully: {components}")
-    return []
-
-def search_properties_by_address_future(address):
-    """Future implementation - could use geocoding + geographic search"""
-    # This would require:
-    # 1. Geocode the address to get lat/lng coordinates
-    # 2. Use the zestimates API with 'near' parameter
-    # 3. Filter results by exact address match
-    pass
+    # Step 2: Search for properties near those coordinates
+    nearby_zpids = search_properties_near_coordinates(
+        geo_result['latitude'], 
+        geo_result['longitude'],
+        limit=20
+    )
+    
+    if not nearby_zpids:
+        logger.warning(f"No properties found near {address}")
+        return []
+    
+    # Step 3: Find the best matching property
+    matching_zpids = find_best_address_match(address, nearby_zpids)
+    
+    if matching_zpids:
+        logger.info(f"Found {len(matching_zpids)} matching properties for {address}")
+        return matching_zpids
+    else:
+        logger.info(f"No exact address match found, returning closest property")
+        return nearby_zpids[:1]  # Return the closest property as a fallback
 
 def get_living_area_from_parcel(areas):
     """Extract living area from parcel data areas, checking multiple area types"""
