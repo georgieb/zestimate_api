@@ -708,13 +708,16 @@ def nearby_properties(zpid):
             if prop_zpid == str(zpid):
                 continue
                 
+            latitude = prop.get('Latitude')
+            longitude = prop.get('Longitude')
+            
             property_info = {
                 'zpid': prop_zpid,
                 'address': prop.get('address'),
                 'zestimate': safe_float(prop.get('zestimate')),
                 'rentalZestimate': safe_float(prop.get('rentalZestimate')),
-                'latitude': prop.get('Latitude'),
-                'longitude': prop.get('Longitude'),
+                'latitude': latitude,
+                'longitude': longitude,
                 'bedrooms': 0,
                 'bathrooms': 0,
                 'livingArea': 0,
@@ -722,9 +725,15 @@ def nearby_properties(zpid):
                 'propertyType': None
             }
             
+            if not latitude or not longitude:
+                logger.warning(f"Property {prop_zpid} missing coordinates: lat={latitude}, lng={longitude}")
+            
             # Update with parcel data if available
             if prop_zpid in parcel_data:
                 property_info.update(parcel_data[prop_zpid])
+                logger.debug(f"Updated property {prop_zpid} with parcel data: beds={property_info.get('bedrooms')}, baths={property_info.get('bathrooms')}, sqft={property_info.get('livingArea')}")
+            else:
+                logger.warning(f"No parcel data found for property {prop_zpid}")
             
             # Calculate cap rate
             if property_info['zestimate'] > 0:
@@ -740,12 +749,20 @@ def nearby_properties(zpid):
             property_type = property_type.strip() if property_type else ''
             
             if source_property_type and property_type:
-                if property_type.lower() == source_property_type.lower():
+                # Exact match only - no partial matching
+                if property_type.lower().strip() == source_property_type.lower().strip():
                     matching_properties.append(property_info)
-                    logger.debug(f"Matching property type: {prop_zpid} - {property_type}")
+                    logger.debug(f"✅ EXACT MATCH: {prop_zpid} - '{property_type}' == '{source_property_type}'")
                 else:
+                    # For Single Family Residential, exclude townhomes, condos, mobile homes completely
+                    if 'single family residential' in source_property_type.lower():
+                        excluded_types = ['townhome', 'townhouse', 'condo', 'condominium', 'mobile home', 'manufactured home']
+                        if any(excluded in property_type.lower() for excluded in excluded_types):
+                            logger.debug(f"❌ EXCLUDED for Single Family: {prop_zpid} - '{property_type}' (excluded type)")
+                            continue  # Skip this property completely
+                    
                     other_properties.append(property_info)
-                    logger.debug(f"Different property type: {prop_zpid} - {property_type} vs {source_property_type}")
+                    logger.debug(f"⚠️ DIFFERENT TYPE: {prop_zpid} - '{property_type}' vs '{source_property_type}'")
             else:
                 other_properties.append(property_info)
         
@@ -757,6 +774,7 @@ def nearby_properties(zpid):
             nearby_properties.extend(other_properties[:remaining_slots])
         
         logger.info(f"Found {len(matching_properties)} matching properties and {len(other_properties)} other properties for source type '{source_property_type}'")
+        logger.info(f"Parcel data retrieved for {len(parcel_data)} properties out of {len(nearby_zpids)} nearby properties")
         
         logger.debug(f"Returning {len(nearby_properties)} nearby properties from {len(data['bundle'])} total properties")
         
