@@ -303,8 +303,19 @@ def are_property_types_compatible(source_type, target_type):
         if source_in_group and target_in_group:
             return True
     
-    # Special case: if source is generic "residential", match with single family
-    if 'residential' in source_type and any(sf_type in target_type for sf_type in single_family_types):
+    # More flexible matching for broader residential categories
+    # If source is single family, also allow generic residential
+    if any(sf_type in source_type for sf_type in single_family_types):
+        if 'residential' in target_type:
+            return True
+    
+    # If target is single family, also allow generic residential source
+    if any(sf_type in target_type for sf_type in single_family_types):
+        if 'residential' in source_type:
+            return True
+    
+    # Allow any residential to match with any residential if no specific category match
+    if 'residential' in source_type and 'residential' in target_type:
         return True
     
     return False
@@ -762,6 +773,20 @@ def nearby_properties(zpid):
             'Manufactured Home'
         ]
         
+        # Property types to exclude completely
+        excluded_property_types = [
+            'vacant land',
+            'residential vacant land',
+            'vacant',
+            'land',
+            'commercial',
+            'industrial',
+            'retail',
+            'office',
+            'warehouse',
+            'parking'
+        ]
+        
         for prop in data['bundle']:
             prop_zpid = str(prop.get('zpid'))
             
@@ -786,16 +811,30 @@ def nearby_properties(zpid):
             
             # Update with parcel data if available
             if prop_zpid in parcel_data:
-                property_info.update(parcel_data[zpid])
+                property_info.update(parcel_data[prop_zpid])
             
             # Filter for residential properties only
             property_type = property_info.get('propertyType') or ''
             property_type = property_type.strip() if property_type else ''
+            property_type_lower = property_type.lower()
+            
+            # First check if it's an excluded property type (vacant land, commercial, etc.)
+            is_excluded = False
+            if property_type:
+                for excluded_type in excluded_property_types:
+                    if excluded_type.lower() in property_type_lower:
+                        is_excluded = True
+                        logger.debug(f"Excluding property type: ZPID {prop_zpid}, Type: '{property_type}'")
+                        break
+            
+            if is_excluded:
+                continue
+            
+            # Now check if it's residential
             is_residential = False
             
             if property_type:
                 # Check if property type contains any residential keywords
-                property_type_lower = property_type.lower()
                 for residential_type in residential_property_types:
                     if residential_type.lower() in property_type_lower:
                         is_residential = True
