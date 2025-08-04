@@ -736,7 +736,8 @@ def nearby_properties(zpid):
                 property_info['capRate'] = 0
             
             # Simple property type matching - prioritize same type, but include others
-            property_type = property_info.get('propertyType', '').strip()
+            property_type = property_info.get('propertyType') or ''
+            property_type = property_type.strip() if property_type else ''
             
             if source_property_type and property_type:
                 if property_type.lower() == source_property_type.lower():
