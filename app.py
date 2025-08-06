@@ -35,6 +35,9 @@ API_KEY = os.getenv("API_KEY")
 
 # Using direct Bridge API address filtering - no geocoding needed
 
+# In-memory storage fallback for read-only environments
+MEMORY_PORTFOLIOS = []
+
 # Google Sheets configuration
 GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "1BvLNvgwK5h7gO_3wD1C2mF8jL9pR6tY")  # Default sheet ID
@@ -925,31 +928,26 @@ def save_portfolio():
         except Exception as e:
             logger.warning(f"Google Sheets save failed, falling back to local file: {e}")
     
-    # Fallback to local file storage
+    # Fallback to in-memory storage (data lost on restart, but works in read-only environments)
     try:
-        try:
-            with open('portfolios.json', 'r') as f:
-                portfolios = json.load(f)
-        except FileNotFoundError:
-            portfolios = []
-        except json.JSONDecodeError:
-            portfolios = []
+        global MEMORY_PORTFOLIOS
         
-        portfolio_index = next((i for i, p in enumerate(portfolios) 
-                              if p['name'] == portfolio_data['name']), None)
+        # Find existing portfolio with same name
+        portfolio_index = next((i for i, p in enumerate(MEMORY_PORTFOLIOS) 
+                              if p.get('name') == portfolio_data['name']), None)
         
         if portfolio_index is not None:
-            portfolios[portfolio_index] = portfolio_data
+            MEMORY_PORTFOLIOS[portfolio_index] = portfolio_data
+            logger.info(f"Updated existing portfolio '{portfolio_data['name']}' in memory")
         else:
-            portfolios.append(portfolio_data)
+            MEMORY_PORTFOLIOS.append(portfolio_data)
+            logger.info(f"Added new portfolio '{portfolio_data['name']}' to memory")
         
-        with open('portfolios.json', 'w') as f:
-            json.dump(portfolios, f)
+        return jsonify({"message": f"Portfolio saved successfully (in-memory, {len(MEMORY_PORTFOLIOS)} total)"}), 200
         
-        return jsonify({"message": "Portfolio saved successfully (local file)"}), 200
     except Exception as e:
-        logger.error(f"Error saving portfolio: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error saving portfolio to memory: {str(e)}")
+        return jsonify({"error": f"Failed to save portfolio: {str(e)}"}), 500
 
 @app.route('/api/get-portfolios', methods=['GET'])
 def get_portfolios():
@@ -962,15 +960,13 @@ def get_portfolios():
         except Exception as e:
             logger.warning(f"Google Sheets get failed, falling back to local file: {e}")
     
-    # Fallback to local file
+    # Fallback to in-memory storage
     try:
-        with open('portfolios.json', 'r') as f:
-            portfolios = json.load(f)
-        return jsonify(portfolios), 200
-    except FileNotFoundError:
-        return jsonify([]), 200
-    except json.JSONDecodeError:
-        logger.error("Invalid JSON in portfolios.json")
+        global MEMORY_PORTFOLIOS
+        logger.info(f"Returning {len(MEMORY_PORTFOLIOS)} portfolios from memory")
+        return jsonify(MEMORY_PORTFOLIOS), 200
+    except Exception as e:
+        logger.error(f"Error getting portfolios from memory: {e}")
         return jsonify([]), 200
 
 @app.route('/api/delete-portfolio', methods=['POST'])
