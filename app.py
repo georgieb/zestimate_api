@@ -17,6 +17,14 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 load_dotenv()
 
+try:
+    import gspread
+    from google.auth.service_account import Credentials
+    SHEETS_AVAILABLE = True
+except ImportError:
+    SHEETS_AVAILABLE = False
+    logger.warning("Google Sheets dependencies not available. Portfolio saving will use local files.")
+
 # Initialize Flask app
 app = Flask(__name__, 
     template_folder='templates',
@@ -26,6 +34,94 @@ CORS(app)
 API_KEY = os.getenv("API_KEY")
 
 # Using direct Bridge API address filtering - no geocoding needed
+
+# Google Sheets configuration
+GOOGLE_SERVICE_ACCOUNT_KEY = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY")
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "1BvLNvgwK5h7gO_3wD1C2mF8jL9pR6tY")  # Default sheet ID
+
+def get_sheets_client():
+    """Get authenticated Google Sheets client"""
+    if not SHEETS_AVAILABLE or not GOOGLE_SERVICE_ACCOUNT_KEY:
+        return None
+    
+    try:
+        # Parse service account key from environment variable
+        service_account_info = json.loads(GOOGLE_SERVICE_ACCOUNT_KEY)
+        credentials = Credentials.from_service_account_info(
+            service_account_info,
+            scopes=['https://www.googleapis.com/auth/spreadsheets']
+        )
+        client = gspread.authorize(credentials)
+        return client
+    except Exception as e:
+        logger.error(f"Failed to authenticate with Google Sheets: {e}")
+        return None
+
+def save_portfolio_to_sheets(portfolio_data):
+    """Save portfolio to Google Sheets"""
+    try:
+        client = get_sheets_client()
+        if not client:
+            return False
+        
+        sheet = client.open_by_key(GOOGLE_SHEET_ID).sheet1
+        
+        # Prepare row data
+        timestamp = datetime.now().isoformat()
+        row_data = [
+            timestamp,
+            portfolio_data.get('name', 'Unnamed'),
+            json.dumps(portfolio_data.get('zpids', [])),
+            portfolio_data.get('input', ''),
+            json.dumps(portfolio_data.get('data', {}))
+        ]
+        
+        # Add header if sheet is empty
+        try:
+            if not sheet.row_values(1):
+                sheet.append_row(['Timestamp', 'Portfolio Name', 'ZPIDs', 'Input', 'Data'])
+        except:
+            sheet.append_row(['Timestamp', 'Portfolio Name', 'ZPIDs', 'Input', 'Data'])
+        
+        # Add portfolio data
+        sheet.append_row(row_data)
+        logger.info(f"Portfolio '{portfolio_data.get('name')}' saved to Google Sheets")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error saving portfolio to Google Sheets: {e}")
+        return False
+
+def get_portfolios_from_sheets():
+    """Get all portfolios from Google Sheets"""
+    try:
+        client = get_sheets_client()
+        if not client:
+            return []
+        
+        sheet = client.open_by_key(GOOGLE_SHEET_ID).sheet1
+        records = sheet.get_all_records()
+        
+        portfolios = []
+        for record in records:
+            try:
+                portfolio = {
+                    'name': record.get('Portfolio Name'),
+                    'zpids': json.loads(record.get('ZPIDs', '[]')),
+                    'input': record.get('Input', ''),
+                    'data': json.loads(record.get('Data', '{}')),
+                    'timestamp': record.get('Timestamp')
+                }
+                portfolios.append(portfolio)
+            except Exception as e:
+                logger.warning(f"Error parsing portfolio record: {e}")
+                continue
+        
+        return portfolios
+        
+    except Exception as e:
+        logger.error(f"Error getting portfolios from Google Sheets: {e}")
+        return []
 
 # Configure retry strategy
 retry_strategy = Retry(
@@ -641,59 +737,79 @@ def nearby_properties(zpid):
         parcel_data = {}
         batch_size = 10
         
+        logger.info(f"Getting parcel data for {len(nearby_zpids)} properties: {nearby_zpids[:5]}...")
+        
         for i in range(0, len(nearby_zpids), batch_size):
             batch = nearby_zpids[i:i + batch_size]
-            logger.debug(f"Fetching parcel data for batch {i//batch_size + 1}")
+            logger.info(f"Fetching parcel data for batch {i//batch_size + 1}: {batch}")
             
-            parcel_response = http.get(
-                "https://api.bridgedataoutput.com/api/v2/pub/parcels",
-                params={
-                    "access_token": API_KEY,
-                    "zpid.in": ",".join(batch)
-                }
-            )
-            parcel_response.raise_for_status()
-            parcel_results = parcel_response.json()
-            
-            if parcel_results.get('bundle'):
-                for parcel in parcel_results['bundle']:
-                    zpid = str(parcel.get('zpid'))
-                    if not zpid:
-                        continue
-                        
-                    # Get building info
-                    buildings = parcel.get('building', [])
-                    building = buildings[0] if buildings else {}
-                    
-                    # Get living area - check multiple area types
-                    areas = parcel.get('areas', [])
-                    living_area = 0
-                    
-                    # Check different area types in order of preference
-                    area_types = [
-                        'Living Building Area',
-                        'Finished Building Area',
-                        'Total Building Area',
-                        'Zillow Calculated Finished Area'
-                    ]
-                    
-                    for area_type in area_types:
-                        area = next((
-                            area.get('areaSquareFeet', 0)
-                            for area in areas
-                            if area.get('type') == area_type
-                        ), 0)
-                        if area:
-                            living_area = area
-                            break
-                    
-                    parcel_data[zpid] = {
-                        'bedrooms': safe_float(building.get('bedrooms')),
-                        'bathrooms': safe_float(building.get('fullBaths', building.get('baths'))),
-                        'livingArea': living_area,
-                        'yearBuilt': building.get('yearBuilt'),
-                        'propertyType': parcel.get('landUseDescription')
+            try:
+                parcel_response = http.get(
+                    "https://api.bridgedataoutput.com/api/v2/pub/parcels",
+                    params={
+                        "access_token": API_KEY,
+                        "zpid.in": ",".join(batch)
                     }
+                )
+                
+                logger.info(f"Parcel API response status: {parcel_response.status_code}")
+                
+                if parcel_response.status_code != 200:
+                    logger.error(f"Parcel API error: {parcel_response.text}")
+                    continue
+                    
+                parcel_results = parcel_response.json()
+                logger.info(f"Parcel API response: success={parcel_results.get('success')}, bundle_count={len(parcel_results.get('bundle', []))}")
+                
+                if parcel_results.get('bundle'):
+                    for parcel in parcel_results['bundle']:
+                        zpid = str(parcel.get('zpid'))
+                        if not zpid:
+                            logger.warning("Parcel missing ZPID")
+                            continue
+                            
+                        # Get building info
+                        buildings = parcel.get('building', [])
+                        building = buildings[0] if buildings else {}
+                        
+                        # Get living area - check multiple area types
+                        areas = parcel.get('areas', [])
+                        living_area = 0
+                        
+                        # Check different area types in order of preference
+                        area_types = [
+                            'Living Building Area',
+                            'Finished Building Area',
+                            'Total Building Area',
+                            'Zillow Calculated Finished Area'
+                        ]
+                        
+                        for area_type in area_types:
+                            area = next((
+                                area.get('areaSquareFeet', 0)
+                                for area in areas
+                                if area.get('type') == area_type
+                            ), 0)
+                            if area:
+                                living_area = area
+                                break
+                        
+                        parcel_info = {
+                            'bedrooms': safe_float(building.get('bedrooms')),
+                            'bathrooms': safe_float(building.get('fullBaths', building.get('baths'))),
+                            'livingArea': living_area,
+                            'yearBuilt': building.get('yearBuilt'),
+                            'propertyType': parcel.get('landUseDescription')
+                        }
+                        
+                        parcel_data[zpid] = parcel_info
+                        logger.debug(f"Parcel data for {zpid}: beds={parcel_info['bedrooms']}, baths={parcel_info['bathrooms']}, sqft={parcel_info['livingArea']}, type='{parcel_info['propertyType']}'")
+                else:
+                    logger.warning(f"No parcel bundle data returned for batch: {batch}")
+                    
+            except Exception as e:
+                logger.error(f"Error fetching parcel data for batch {batch}: {str(e)}")
+                continue
             
             time.sleep(1)  # Rate limiting between batches
         
@@ -791,7 +907,18 @@ def save_portfolio():
     
     if not portfolio_data or not portfolio_data.get('name'):
         return jsonify({"error": "Portfolio name is required"}), 400
-        
+    
+    portfolio_data['timestamp'] = datetime.now().isoformat()
+    
+    # Try Google Sheets first
+    if SHEETS_AVAILABLE and GOOGLE_SERVICE_ACCOUNT_KEY:
+        try:
+            if save_portfolio_to_sheets(portfolio_data):
+                return jsonify({"message": "Portfolio saved successfully to Google Sheets"}), 200
+        except Exception as e:
+            logger.warning(f"Google Sheets save failed, falling back to local file: {e}")
+    
+    # Fallback to local file storage
     try:
         try:
             with open('portfolios.json', 'r') as f:
@@ -800,8 +927,6 @@ def save_portfolio():
             portfolios = []
         except json.JSONDecodeError:
             portfolios = []
-        
-        portfolio_data['timestamp'] = datetime.now().isoformat()
         
         portfolio_index = next((i for i, p in enumerate(portfolios) 
                               if p['name'] == portfolio_data['name']), None)
@@ -814,13 +939,23 @@ def save_portfolio():
         with open('portfolios.json', 'w') as f:
             json.dump(portfolios, f)
         
-        return jsonify({"message": "Portfolio saved successfully"}), 200
+        return jsonify({"message": "Portfolio saved successfully (local file)"}), 200
     except Exception as e:
         logger.error(f"Error saving portfolio: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/get-portfolios', methods=['GET'])
 def get_portfolios():
+    # Try Google Sheets first
+    if SHEETS_AVAILABLE and GOOGLE_SERVICE_ACCOUNT_KEY:
+        try:
+            portfolios = get_portfolios_from_sheets()
+            if portfolios:
+                return jsonify(portfolios), 200
+        except Exception as e:
+            logger.warning(f"Google Sheets get failed, falling back to local file: {e}")
+    
+    # Fallback to local file
     try:
         with open('portfolios.json', 'r') as f:
             portfolios = json.load(f)
