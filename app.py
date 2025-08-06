@@ -903,10 +903,17 @@ def nearby_properties(zpid):
 @app.route('/api/save-portfolio', methods=['POST'])
 def save_portfolio():
     portfolio_data = request.json
-    logger.debug(f"Saving portfolio: {portfolio_data}")
+    logger.info(f"Save portfolio request received. Data keys: {list(portfolio_data.keys()) if portfolio_data else 'None'}")
+    logger.debug(f"Portfolio data: {portfolio_data}")
     
-    if not portfolio_data or not portfolio_data.get('name'):
-        return jsonify({"error": "Portfolio name is required"}), 400
+    if not portfolio_data:
+        logger.error("No portfolio data received")
+        return jsonify({"error": "No portfolio data provided"}), 400
+        
+    portfolio_name = portfolio_data.get('name', '').strip()
+    if not portfolio_name:
+        logger.error(f"Portfolio name missing or empty. Received: '{portfolio_data.get('name')}'")
+        return jsonify({"error": "Portfolio name is required and cannot be empty"}), 400
     
     portfolio_data['timestamp'] = datetime.now().isoformat()
     

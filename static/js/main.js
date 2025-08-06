@@ -452,6 +452,22 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
+        // Get portfolio name from input field or prompt user
+        let portfolioName = document.getElementById('portfolioName').value.trim();
+        if (!portfolioName) {
+            portfolioName = prompt('Please enter a name for this portfolio:');
+            if (!portfolioName || !portfolioName.trim()) {
+                alert('Portfolio name is required');
+                return;
+            }
+            portfolioName = portfolioName.trim();
+            // Update the input field with the name
+            document.getElementById('portfolioName').value = portfolioName;
+        }
+
+        // Update the portfolio with the name
+        currentPortfolio.name = portfolioName;
+
         try {
             const response = await fetch('/api/save-portfolio', {
                 method: 'POST',
@@ -461,10 +477,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify(currentPortfolio)
             });
 
-            if (!response.ok) throw new Error('Failed to save portfolio');
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                throw new Error(`Failed to save portfolio: ${errorData.error || response.statusText}`);
+            }
 
-            alert('Portfolio saved successfully!');
+            const result = await response.json();
+            alert(result.message || 'Portfolio saved successfully!');
         } catch (error) {
+            console.error('Portfolio save error:', error);
             alert('Error saving portfolio: ' + error.message);
         }
     });
