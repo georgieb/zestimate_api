@@ -44,18 +44,32 @@ GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "1BvLNvgwK5h7gO_3wD1C2mF8jL9pR6tY
 
 def get_sheets_client():
     """Get authenticated Google Sheets client"""
-    if not SHEETS_AVAILABLE or not GOOGLE_SERVICE_ACCOUNT_KEY:
+    if not SHEETS_AVAILABLE:
+        logger.error("Google Sheets dependencies not available")
+        return None
+    
+    if not GOOGLE_SERVICE_ACCOUNT_KEY:
+        logger.error("GOOGLE_SERVICE_ACCOUNT_KEY environment variable not set")
         return None
     
     try:
         # Parse service account key from environment variable
+        logger.debug("Parsing Google service account key from environment variable")
         service_account_info = json.loads(GOOGLE_SERVICE_ACCOUNT_KEY)
+        logger.debug(f"Service account info parsed successfully, type: {service_account_info.get('type')}")
+        
         credentials = Credentials.from_service_account_info(
             service_account_info,
             scopes=['https://www.googleapis.com/auth/spreadsheets']
         )
+        logger.debug("Credentials created successfully")
+        
         client = gspread.authorize(credentials)
+        logger.debug("Google Sheets client authorized successfully")
         return client
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse GOOGLE_SERVICE_ACCOUNT_KEY as JSON: {e}")
+        return None
     except Exception as e:
         logger.error(f"Failed to authenticate with Google Sheets: {e}")
         return None
@@ -63,11 +77,20 @@ def get_sheets_client():
 def save_portfolio_to_sheets(portfolio_data):
     """Save portfolio to Google Sheets"""
     try:
+        logger.debug("Starting portfolio save to Google Sheets")
         client = get_sheets_client()
         if not client:
+            logger.error("Failed to get Google Sheets client")
             return False
         
-        sheet = client.open_by_key(GOOGLE_SHEET_ID).sheet1
+        logger.debug(f"Opening Google Sheet with ID: {GOOGLE_SHEET_ID}")
+        try:
+            workbook = client.open_by_key(GOOGLE_SHEET_ID)
+            sheet = workbook.sheet1
+            logger.debug("Successfully opened Google Sheet")
+        except Exception as e:
+            logger.error(f"Failed to open Google Sheet: {e}")
+            return False
         
         # Prepare row data
         timestamp = datetime.now().isoformat()
@@ -78,21 +101,28 @@ def save_portfolio_to_sheets(portfolio_data):
             portfolio_data.get('input', ''),
             json.dumps(portfolio_data.get('data', {}))
         ]
+        logger.debug(f"Prepared row data for portfolio: {portfolio_data.get('name')}")
         
         # Add header if sheet is empty
         try:
-            if not sheet.row_values(1):
+            existing_headers = sheet.row_values(1)
+            if not existing_headers:
+                logger.debug("Sheet appears empty, adding headers")
                 sheet.append_row(['Timestamp', 'Portfolio Name', 'ZPIDs', 'Input', 'Data'])
-        except:
+            else:
+                logger.debug(f"Sheet has existing headers: {existing_headers}")
+        except Exception as e:
+            logger.warning(f"Could not check headers, adding them anyway: {e}")
             sheet.append_row(['Timestamp', 'Portfolio Name', 'ZPIDs', 'Input', 'Data'])
         
         # Add portfolio data
+        logger.debug("Adding portfolio data to sheet")
         sheet.append_row(row_data)
-        logger.info(f"Portfolio '{portfolio_data.get('name')}' saved to Google Sheets")
+        logger.info(f"Portfolio '{portfolio_data.get('name')}' saved successfully to Google Sheets")
         return True
         
     except Exception as e:
-        logger.error(f"Error saving portfolio to Google Sheets: {e}")
+        logger.error(f"Error saving portfolio to Google Sheets: {e}", exc_info=True)
         return False
 
 def get_portfolios_from_sheets():
@@ -1079,6 +1109,63 @@ def debug_parcels():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/debug-sheets', methods=['GET'])
+def debug_sheets():
+    """Debug Google Sheets connection"""
+    debug_info = {
+        "sheets_available": SHEETS_AVAILABLE,
+        "google_service_account_key_set": bool(GOOGLE_SERVICE_ACCOUNT_KEY),
+        "google_sheet_id": GOOGLE_SHEET_ID,
+        "google_service_account_key_length": len(GOOGLE_SERVICE_ACCOUNT_KEY) if GOOGLE_SERVICE_ACCOUNT_KEY else 0
+    }
+    
+    if GOOGLE_SERVICE_ACCOUNT_KEY:
+        try:
+            # Try to parse the service account key
+            service_account_info = json.loads(GOOGLE_SERVICE_ACCOUNT_KEY)
+            debug_info["service_account_type"] = service_account_info.get("type")
+            debug_info["service_account_project_id"] = service_account_info.get("project_id")
+            debug_info["service_account_client_email"] = service_account_info.get("client_email")
+            debug_info["json_parse_success"] = True
+        except Exception as e:
+            debug_info["json_parse_error"] = str(e)
+            debug_info["json_parse_success"] = False
+    
+    # Try to get a client
+    try:
+        client = get_sheets_client()
+        debug_info["client_creation_success"] = bool(client)
+        
+        if client:
+            # Try to open the sheet
+            try:
+                workbook = client.open_by_key(GOOGLE_SHEET_ID)
+                debug_info["sheet_open_success"] = True
+                debug_info["sheet_title"] = workbook.title
+                
+                # Try to access the first worksheet
+                sheet = workbook.sheet1
+                debug_info["worksheet_access_success"] = True
+                debug_info["worksheet_title"] = sheet.title
+                
+                # Try to read headers
+                try:
+                    headers = sheet.row_values(1)
+                    debug_info["headers_read_success"] = True
+                    debug_info["current_headers"] = headers
+                except Exception as e:
+                    debug_info["headers_read_error"] = str(e)
+                    
+            except Exception as e:
+                debug_info["sheet_open_error"] = str(e)
+                debug_info["sheet_open_success"] = False
+                
+    except Exception as e:
+        debug_info["client_creation_error"] = str(e)
+        debug_info["client_creation_success"] = False
+    
+    return jsonify(debug_info)
 
 @app.route('/api/test-address-fields', methods=['POST'])
 def test_address_fields():
