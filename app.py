@@ -19,11 +19,14 @@ load_dotenv()
 
 try:
     import gspread
-    from google.auth.service_account import Credentials
+    logger.info("Successfully imported gspread")
+    from google.oauth2.service_account import Credentials
+    logger.info("Successfully imported Credentials from google.oauth2.service_account")
     SHEETS_AVAILABLE = True
-except ImportError:
+    logger.info("Google Sheets dependencies available")
+except ImportError as e:
     SHEETS_AVAILABLE = False
-    logger.warning("Google Sheets dependencies not available. Portfolio saving will use local files.")
+    logger.error(f"Google Sheets dependencies not available: {e}. Portfolio saving will use in-memory storage.")
 
 # Initialize Flask app
 app = Flask(__name__, 
